@@ -1,0 +1,6 @@
+{
+  "name": "Event Ticketing Pro",
+  "description": "ระบบจำหน่ายบัตรงานเลี้ยง โต๊ะจีน 100 โต๊ะ พร้อมระบบจองที่นั่ง สแกนหน้างาน และจับฉลาก",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,115 @@
+{
+  "collections": {
+    "config": {
+      "__doc__": "Global configuration for the event.",
+      "fields": {
+        "eventName": "string",
+        "eventDate": "string",
+        "eventTime": "string",
+        "contactPhone": "string"
+      },
+      "rules": {
+        "read": "true",
+        "write": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'"
+      }
+    },
+    "tables": {
+      "__doc__": "Table configurations and their current states/seats.",
+      "fields": {
+        "zoneId": "string",
+        "seats": "array"
+      },
+      "rules": {
+        "read": "true",
+        "write": "request.auth != null && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'staff')"
+      }
+    },
+    "tickets": {
+      "__doc__": "Purchased tickets. Some fields are updated during check-in.",
+      "fields": {
+        "userName": "string",
+        "phone": "string",
+        "email": "string",
+        "tableId": "string",
+        "seatIds": "array",
+        "totalAmount": "number",
+        "paymentMethod": "string",
+        "status": "string",
+        "qrCodeUrl": "string",
+        "checkInTime": "string?",
+        "checkedInSeats": "array?",
+        "drinksRedeemed": "number",
+        "isSponsor": "boolean?"
+      },
+      "rules": {
+        "read": "true",
+        "create": "true",
+        "update": "request.auth != null && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'staff')",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'"
+      }
+    },
+    "surveys": {
+      "__doc__": "Satisfaction survey responses.",
+      "fields": {
+        "ticketId": "string",
+        "seatId": "number?",
+        "ratings": "map",
+        "comment": "string?",
+        "timestamp": "number"
+      },
+      "rules": {
+        "read": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'",
+        "create": "true",
+        "update": "false",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'"
+      }
+    },
+    "users": {
+      "__doc__": "Admin and staff users.",
+      "fields": {
+        "email": "string",
+        "role": "string"
+      },
+      "rules": {
+        "read": "request.auth != null",
+        "write": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'"
+      }
+    },
+    "booths": {
+      "__doc__": "Event Activity Booths managed by Admins.",
+      "fields": {
+        "name": "string",
+        "ownerName": "string",
+        "phone": "string",
+        "promptpayId": "string",
+        "promptpayName": "string",
+        "description": "string?",
+        "rentFee": "number",
+        "commissionRate": "number",
+        "createdAt": "string"
+      },
+      "rules": {
+        "read": "true",
+        "write": "request.auth != null"
+      }
+    },
+    "boothScanLogs": {
+      "__doc__": "Logs when staff scans participant QR codes at activity booths.",
+      "fields": {
+        "boothId": "string",
+        "boothName": "string",
+        "ticketId": "string",
+        "seatId": "number?",
+        "userName": "string",
+        "phone": "string",
+        "timestamp": "string",
+        "salesAmount": "number",
+        "notes": "string?"
+      },
+      "rules": {
+        "read": "true",
+        "write": "request.auth != null"
+      }
+    }
+  }
+}
