@@ -63,6 +63,7 @@ import {
   Eye,
   AlertTriangle,
   Crosshair,
+  ArrowLeft,
   Lock,
   Timer,
   CheckCircle2,
@@ -82,6 +83,10 @@ import {
   isValidHexColor,
   normalizeHexColor,
 } from "../utils/themeHelpers";
+import {
+  DEFAULT_LINE_OA_ID,
+  normalizeLineOaInfo,
+} from "../utils/lineHelpers";
 import { motion } from "motion/react";
 import { SURVEY_TOPICS } from "./SurveyView";
 import { ConfigContext } from "../ConfigContext";
@@ -892,6 +897,50 @@ export default function AdminDashboardView({
   const [reportTitle, setReportTitle] = useState("");
   const [pendingUsersCount, setPendingUsersCount] = useState(0);
   const [latestGroupId, setLatestGroupId] = useState("");
+  const [lineQrDataUrl, setLineQrDataUrl] = useState("");
+
+  const lineOaInfo = useMemo(
+    () => normalizeLineOaInfo(localConfig?.lineSupportOa || localConfig?.lineGroupLink),
+    [localConfig?.lineSupportOa, localConfig?.lineGroupLink]
+  );
+
+  useEffect(() => {
+    let active = true;
+    QRCode.toDataURL(lineOaInfo.url, {
+      width: 256,
+      margin: 2,
+      errorCorrectionLevel: "M",
+      color: { dark: "#0f172a", light: "#ffffff" },
+    })
+      .then((url) => {
+        if (active) setLineQrDataUrl(url);
+      })
+      .catch((err) => {
+        console.error("Failed to generate LINE QR code:", err);
+      });
+    return () => {
+      active = false;
+    };
+  }, [lineOaInfo.url]);
+
+  useEffect(() => {
+    if (!isReportModalOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setReportModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isReportModalOpen]);
+
+  const handleReturnToAdminHome = () => {
+    setReportModalOpen(false);
+    setActiveTab("overview");
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
 
   const fetchLatestGroupId = async () => {
     try {
@@ -2634,6 +2683,26 @@ export default function AdminDashboardView({
           </div>
         </div>
       </div>
+
+      {activeTab !== "overview" && (
+        <div className="print:hidden mb-5 flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl px-4 py-2.5 shadow-sm">
+          <div className="flex items-center gap-2 text-xs text-slate-500 min-w-0">
+            <span className="font-bold text-slate-400 whitespace-nowrap">ระบบควบคุมหลังบ้าน</span>
+            <span className="text-slate-300">/</span>
+            <span className="font-extrabold text-slate-800 truncate">
+              {ADMIN_TABS_BY_ID[activeTab]?.label}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleReturnToAdminHome}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all active:scale-95 whitespace-nowrap shrink-0 cursor-pointer shadow-sm"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+            <span>กลับหน้าหลักระบบหลังบ้าน</span>
+          </button>
+        </div>
+      )}
 
       {activeTab === "overview" ? (
         <>
@@ -6482,17 +6551,65 @@ export default function AdminDashboardView({
                     handleUpdateLocalConfig({ lineAdminUserId: e.target.value })
                   }
                 />
-                <input
-                  type="text"
-                  placeholder="LINE OA Link (ลิงก์เพิ่มเพื่อน LINE OA) เช่น https://lin.me/ti/p/..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
-                  value={localConfig.lineGroupLink || ""}
-                  onChange={(e) =>
-                    handleUpdateLocalConfig({ lineGroupLink: e.target.value })
-                  }
-                />
-                <div className="text-xs text-slate-500 mt-1">
-                  ลิงก์สำหรับให้ลูกค้ากดเพิ่มเพื่อน หรือ ทักแชท LINE OA เพื่อส่งสลิป
+                <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                  <label className="text-xs font-bold text-slate-700 block">
+                    LINE OA สำหรับติดต่อเจ้าหน้าที่ &amp; ป้ายบอกทาง (แสดงบนป้ายและอีเมล)
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 space-y-1">
+                      <input
+                        type="text"
+                        placeholder={DEFAULT_LINE_OA_ID}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-primary/20 outline-none"
+                        value={
+                          localConfig.lineSupportOa !== undefined
+                            ? localConfig.lineSupportOa
+                            : DEFAULT_LINE_OA_ID
+                        }
+                        onChange={(e) =>
+                          handleUpdateLocalConfig({ lineSupportOa: e.target.value })
+                        }
+                      />
+                      <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                        <span className="truncate">
+                          ลิงก์ QR: <strong className="text-emerald-700">{lineOaInfo.url}</strong>
+                        </span>
+                        <a
+                          href={lineOaInfo.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-emerald-600 hover:underline font-bold whitespace-nowrap shrink-0"
+                        >
+                          ทดสอบเปิด LINE
+                        </a>
+                      </div>
+                    </div>
+                    {lineQrDataUrl && (
+                      <img
+                        src={lineQrDataUrl}
+                        alt={`QR Code ${lineOaInfo.id}`}
+                        className="w-14 h-14 rounded-lg border border-slate-200 bg-white p-1 shrink-0 shadow-sm"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-1 pt-2 border-t border-slate-100">
+                  <label className="text-xs font-bold text-slate-700 block">
+                    LINE OA Link สำหรับให้ลูกค้าส่งสลิปทางแชท (ไม่บังคับ)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="เว้นว่างไว้หากต้องการให้ลูกค้าอัปโหลดสลิปบนเว็บไซต์โดยตรง"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
+                    value={localConfig.lineGroupLink || ""}
+                    onChange={(e) =>
+                      handleUpdateLocalConfig({ lineGroupLink: e.target.value })
+                    }
+                  />
+                  <div className="text-xs text-slate-500 mt-1">
+                    หากกรอกช่องนี้ ระบบหน้าชำระเงินจะเปลี่ยนเป็นปุ่มส่งสลิปผ่านแชท LINE OA แทนการอัปโหลดบนหน้าเว็บ
+                  </div>
                 </div>
 
                 <div className="bg-slate-100 p-4 rounded-xl mt-4 space-y-4">
@@ -8733,19 +8850,31 @@ export default function AdminDashboardView({
           <div className="bg-slate-50 rounded-3xl max-w-6xl w-full h-[90vh] flex flex-col md:flex-row shadow-2xl border border-slate-200 overflow-hidden animate-in scale-in-95 duration-150">
             
             {/* Left Controller Panel */}
-            <div className="w-full md:w-[360px] bg-white border-b md:border-b-0 md:border-r border-slate-200 p-6 flex flex-col justify-between font-sans">
-              <div className="space-y-6">
-                
-                {/* Header */}
-                <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+            <div className="w-full md:w-[370px] bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col h-full min-h-0 overflow-hidden font-sans">
+              {/* Pinned Top Header */}
+              <div className="shrink-0 px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3 bg-white">
+                <div className="flex items-center gap-3 min-w-0">
                   <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 shadow-sm shrink-0">
                     <Printer className="w-5 h-5" />
                   </div>
-                  <div>
-                    <h2 className="font-black text-slate-800 text-base leading-tight">ศูนย์ออกรายงานผล</h2>
-                    <p className="text-xs text-slate-500 font-medium">Realtime Intelligent Reporter</p>
+                  <div className="min-w-0">
+                    <h2 className="font-black text-slate-800 text-base leading-tight truncate">ศูนย์ออกรายงานผล</h2>
+                    <p className="text-xs text-slate-500 font-medium truncate">Realtime Intelligent Reporter</p>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={handleReturnToAdminHome}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold transition whitespace-nowrap shrink-0 cursor-pointer"
+                  title="กลับหน้าหลักระบบควบคุมหลังบ้าน"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+                  <span>หน้าหลัก</span>
+                </button>
+              </div>
+
+              {/* Scrollable Controls Area */}
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-h-0">
 
                 {/* Navigation selections */}
                 <div className="space-y-2">
@@ -8821,7 +8950,7 @@ export default function AdminDashboardView({
                 </div>
 
                 {reportType === "labels" && (
-                  <div className="space-y-3 pt-3 border-t border-slate-100 overflow-y-auto max-h-[35vh] pr-1">
+                  <div className="space-y-3 pt-3 border-t border-slate-100">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
                       ตั้งค่าพิมพ์ลาเบล (Label Settings)
                     </span>
@@ -9234,6 +9363,39 @@ export default function AdminDashboardView({
                             );
                           })}
                         </div>
+                      {/* Quick LINE OA ID Editor inside Direction Sign Settings */}
+                      <div className="space-y-1.5 pt-3 border-t border-slate-100">
+                        <label className="text-[10px] font-bold text-slate-500 block">
+                          LINE OA บนป้ายนำทาง &amp; QR Code
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={
+                              localConfig.lineSupportOa !== undefined
+                                ? localConfig.lineSupportOa
+                                : DEFAULT_LINE_OA_ID
+                            }
+                            onChange={(e) =>
+                              handleUpdateLocalConfig({ lineSupportOa: e.target.value })
+                            }
+                            placeholder={DEFAULT_LINE_OA_ID}
+                            className="flex-1 text-xs font-mono font-bold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white focus:border-slate-800 outline-none"
+                          />
+                          <a
+                            href={lineOaInfo.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-[10px] font-bold whitespace-nowrap shrink-0"
+                            title={`เปิด ${lineOaInfo.url}`}
+                          >
+                            ทดสอบ QR
+                          </a>
+                        </div>
+                        <p className="text-[10px] text-slate-400 truncate">
+                          ลิงก์ปลายทาง QR: {lineOaInfo.url}
+                        </p>
+                      </div>
                       </div>
                     )}
                   </div>
@@ -9241,29 +9403,66 @@ export default function AdminDashboardView({
 
               </div>
 
-              {/* Action Buttons */}
-              <div className="grid grid-cols-2 gap-3 mt-6 border-t border-slate-100 pt-4">
+              {/* Pinned Bottom Action Buttons */}
+              <div className="shrink-0 grid grid-cols-2 gap-2.5 px-5 py-4 border-t border-slate-200 bg-white">
                 <button
                   type="button"
-                  onClick={() => setReportModalOpen(false)}
-                  className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-all active:scale-95 text-center"
+                  onClick={handleReturnToAdminHome}
+                  className="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-all active:scale-95 flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
                 >
-                  ย้อนกลับ (Close)
+                  <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+                  <span>กลับหน้าหลักหลังบ้าน</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => window.print()}
-                  className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                  className="w-full py-2.5 px-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
                 >
-                  <Printer className="w-4 h-4" />
-                  พิมพ์รายงาน PDF
+                  <Printer className="w-4 h-4 shrink-0" />
+                  <span>พิมพ์รายงาน PDF</span>
                 </button>
               </div>
 
             </div>
 
             {/* Right WYSIWYG Document Viewer (Desktop Styled Page Box) */}
-            <div className="flex-1 bg-slate-700/60 p-6 md:p-8 overflow-y-auto flex justify-center items-start border-l border-slate-200 select-none">
+            <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-slate-700/60 border-l border-slate-200">
+              {/* Pinned Top Action Bar on Preview Side */}
+              <div className="shrink-0 bg-slate-800/95 text-white px-4 sm:px-6 py-3 border-b border-slate-700 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-slate-300 shrink-0" />
+                  <span>ตัวอย่างเอกสารก่อนพิมพ์ (A4 Preview)</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleReturnToAdminHome}
+                    className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-900 text-xs font-extrabold flex items-center gap-1.5 transition active:scale-95 whitespace-nowrap cursor-pointer shadow-sm"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+                    <span>กลับสู่หน้าหลักระบบควบคุมหลังบ้าน</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 transition active:scale-95 whitespace-nowrap cursor-pointer shadow-sm"
+                  >
+                    <Printer className="w-3.5 h-3.5 shrink-0" />
+                    <span>พิมพ์ / PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReportModalOpen(false)}
+                    className="p-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white transition cursor-pointer"
+                    title="ปิดหน้าต่าง (Esc)"
+                    aria-label="Close preview"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 p-6 md:p-8 overflow-y-auto flex justify-center items-start select-none min-h-0">
               
               {/* Paper Box mimicking A4 Sheet */}
               <div className="bg-white w-[794px] min-h-[1123px] shadow-2xl p-10 relative rounded-lg text-slate-800 scale-90 md:scale-100 origin-top shrink-0 flex flex-col justify-between font-sans">
@@ -9905,31 +10104,31 @@ export default function AdminDashboardView({
                                           รหัสอ้างอิงตำแหน่งป้ายนี้: <strong className="text-rose-600 font-black text-[10px]">SG-{zone.id}-{signIndex}</strong>
                                         </span>
                                       </div>
-                                      <div className="flex items-center gap-1.5 border border-emerald-100 rounded-lg p-1 bg-emerald-50/40 max-w-[170px] select-none text-right">
+                                      <a
+                                        href={lineOaInfo.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-2 border border-emerald-200 rounded-xl p-1.5 bg-emerald-50/50 hover:bg-emerald-50 transition max-w-[205px] select-none text-right"
+                                      >
                                         <div className="text-right flex flex-col justify-center">
                                           <span className="text-[7px] text-slate-500 font-bold leading-tight block">
                                             หากหลงทาง/ไม่พบโต๊ะ ติดต่อเจ้าหน้าที่
                                           </span>
-                                          <span className="text-[8px] text-emerald-600 font-black leading-tight block">
-                                            {(() => {
-                                              const lineLink = localConfig.lineGroupLink || "https://line.me/R/ti/p/@792zqqbw";
-                                              if (lineLink.includes("@792zqqbw") || lineLink.includes("digitecteam")) {
-                                                return "LINE: @792zqqbw (digitecteam)";
-                                              }
-                                              const match = lineLink.match(/@[a-zA-Z0-9_-]+/);
-                                              if (match) return `LINE: ${match[0]}`;
-                                              const lastPart = lineLink.split('/').filter(Boolean).pop() || "digitecteam";
-                                              return `LINE: ${lastPart.startsWith('@') ? lastPart : `@${lastPart}`}`;
-                                            })()}
+                                          <span className="text-[9px] text-emerald-700 font-black leading-tight block mt-0.5">
+                                            {lineOaInfo.displayLabel}
                                           </span>
                                         </div>
-                                        <img 
-                                          src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(localConfig.lineGroupLink || "https://line.me/R/ti/p/@792zqqbw")}`} 
-                                          alt="LINE OA QR Code" 
-                                          className="w-9 h-9 object-contain rounded bg-white border border-emerald-100 p-0.5 shrink-0 shadow-sm"
-                                          referrerPolicy="no-referrer"
+                                        <img
+                                          src={
+                                            lineQrDataUrl ||
+                                            `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
+                                              lineOaInfo.url
+                                            )}`
+                                          }
+                                          alt={`LINE OA QR Code ${lineOaInfo.id}`}
+                                          className="w-11 h-11 object-contain rounded-lg bg-white border border-emerald-200 p-0.5 shrink-0 shadow-sm"
                                         />
-                                      </div>
+                                      </a>
                                     </div>
                                   </div>
                                 );
@@ -9955,6 +10154,8 @@ export default function AdminDashboardView({
                 </div>
 
               </div>
+
+            </div>
 
             </div>
 

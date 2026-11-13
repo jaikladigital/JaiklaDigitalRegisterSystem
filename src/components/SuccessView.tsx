@@ -3,10 +3,12 @@ import React, { useContext } from 'react';
 import { CheckCircle2, Ticket } from 'lucide-react';
 import { motion } from 'motion/react';
 import { ConfigContext } from '../ConfigContext';
+import { normalizeLineOaInfo } from '../utils/lineHelpers';
 
 export default function SuccessView({ onGoToTickets }: any) {
   const { config } = useContext(ConfigContext);
   const successMessage = config.notificationCustomerSuccess || 'ชำระเงินเรียบร้อย ตรวจสอบอีเมลของคุณ';
+  const lineInfo = normalizeLineOaInfo(config.lineGroupLink);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh]">
@@ -29,13 +31,13 @@ export default function SuccessView({ onGoToTickets }: any) {
           <Ticket className="w-5 h-5" /> ดูบัตรของฉัน (My Tickets)
         </button>
         <a 
-          href="https://line.me/R/ti/p/@792zqqbw"
+          href={lineInfo.url}
           target="_blank"
           rel="noreferrer"
           className="bg-[#00B900] hover:brightness-110 text-white px-8 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-          ติดตาม LINE OA (digitecteam)
+          ติดตาม LINE OA ({lineInfo.id})
         </a>
       </div>
     </div>

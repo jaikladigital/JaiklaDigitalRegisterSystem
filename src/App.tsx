@@ -73,7 +73,8 @@ const DEFAULT_CONFIG = {
   boothGpPercent: 15,
   adminTabsOrder: ['overview', 'move_seats', 'users', 'logs', 'emails', 'notifications', 'slips', 'booths'],
   eventRadiusKm: 2,
-  eventLocationName: ''
+  eventLocationName: '',
+  lineSupportOa: '@454hwmgg'
 };
 
 export default function App() {

@@ -7,10 +7,12 @@ import { motion } from 'motion/react';
 import ThaiQRPayment from './ThaiQRPayment';
 import { storage } from '../lib/firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { normalizeLineOaInfo } from '../utils/lineHelpers';
 
 export default function CheckoutView({ cart, cartTotals, tables, onBack, holdExpiryTime, onHoldExpired, onComplete }: any) {
   const { config, t } = useContext(ConfigContext);
   const activeZones = config.zones || ZONES;
+  const lineInfo = normalizeLineOaInfo(config.lineSupportOa || config.lineGroupLink);
 
   const [timeLeft, setTimeLeft] = useState<number>(() => {
     return Math.max(0, Math.floor((holdExpiryTime - Date.now()) / 1000));
@@ -278,7 +280,7 @@ export default function CheckoutView({ cart, cartTotals, tables, onBack, holdExp
                     <p className="font-bold text-slate-800 mb-2">ส่งสลิปยืนยันทาง LINE OA</p>
                     <p className="text-sm text-slate-600 mb-6">คลิกปุ่มด้านล่างเพื่อเพิ่มเพื่อน LINE OA ของเรา และส่งรูปสลิปของคุณเข้าไปในแชทเพื่อให้ระบบตรวจสอบอัตโนมัติ</p>
                     <a 
-                      href={config.lineGroupLink} 
+                      href={normalizeLineOaInfo(config.lineGroupLink).url} 
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="bg-[#06C755] text-white hover:bg-[#05b34c] px-6 py-3 rounded-xl font-bold transition-colors w-full mb-4 shadow-sm block text-center"
@@ -363,13 +365,13 @@ export default function CheckoutView({ cart, cartTotals, tables, onBack, holdExp
             <p className="text-sm text-rose-600">ชำระเงินไม่เรียบร้อย หรือต้องการความช่วยเหลือ โปรดติดต่อเจ้าหน้าที่</p>
           </div>
           <a 
-            href="https://line.me/R/ti/p/@792zqqbw" 
+            href={lineInfo.url} 
             target="_blank" 
             rel="noreferrer"
             className="flex items-center gap-2 bg-[#00B900] text-white px-6 py-2.5 rounded-xl font-bold hover:brightness-110 transition whitespace-nowrap"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-            LINE OA: digitecteam
+            LINE OA: {lineInfo.id}
           </a>
         </div>
       )}

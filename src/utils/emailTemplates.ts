@@ -191,12 +191,12 @@ export function getEmailHtml(theme: EmailTheme, eventName: string, bodyText: str
         <p style="font-size: 14px; font-weight: bold; margin-bottom: 12px; line-height: 1.5; color: ${t.color};">
           พบปัญหา/มีข้อสงสัยเสนอแนะ/สอบถามข้อมูลทั่วไป<br/>เกี่ยวกับระบบหรือการชำระ สแกนหรือกดที่คิวอาร์โค้ด
         </p>
-        <a href="https://line.me/R/ti/p/@792zqqbw" target="_blank" style="display: inline-block;">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://line.me/R/ti/p/@792zqqbw" alt="LINE OA digitecteam" style="width: 120px; height: 120px; border: 1px solid ${t.borderColor}; border-radius: 8px; padding: 5px; background: #ffffff;" />
+        <a href="https://line.me/R/ti/p/@454hwmgg" target="_blank" style="display: inline-block;">
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent('https://line.me/R/ti/p/@454hwmgg')}" alt="LINE OA @454hwmgg" style="width: 120px; height: 120px; border: 1px solid ${t.borderColor}; border-radius: 8px; padding: 5px; background: #ffffff;" />
         </a>
         <div style="margin-top: 15px;">
-          <a href="https://line.me/R/ti/p/@792zqqbw" target="_blank" style="display: inline-block; background-color: #00B900; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; font-size: 14px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            พูดคุยกับแอดมินทาง LINE (digitecteam)
+          <a href="https://line.me/R/ti/p/@454hwmgg" target="_blank" style="display: inline-block; background-color: #00B900; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; font-size: 14px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+            พูดคุยกับแอดมินทาง LINE (@454hwmgg)
           </a>
         </div>
       </div>
