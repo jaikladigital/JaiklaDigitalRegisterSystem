@@ -49,6 +49,12 @@ import {
   FileSpreadsheet,
   ExternalLink,
   ChevronDown,
+  ChevronUp,
+  ChevronsUp,
+  GripVertical,
+  SlidersHorizontal,
+  MessageSquare,
+  Check,
   Lock,
   Timer,
   CheckCircle2,
@@ -561,6 +567,105 @@ const LayoutIcon = ({ type, color }: { type: string; color: string }) => {
     </svg>
   );
 };
+
+type AdminTabId =
+  | "overview"
+  | "move_seats"
+  | "users"
+  | "logs"
+  | "emails"
+  | "notifications"
+  | "slips"
+  | "booths";
+
+interface AdminTabMeta {
+  id: AdminTabId;
+  label: string;
+  description: string;
+  renderIcon: (className?: string) => React.ReactNode;
+}
+
+const ADMIN_TABS_CONFIG: AdminTabMeta[] = [
+  {
+    id: "overview",
+    label: "ภาพรวม & ตั้งค่า",
+    description: "สรุปยอดขาย ผังโซนที่นั่ง ตั้งค่าระบบ และเครื่องมือพิมพ์บัตร/ป้าย",
+    renderIcon: (className = "w-3.5 h-3.5") => <LayoutGrid className={className} />,
+  },
+  {
+    id: "move_seats",
+    label: "จัดการย้ายที่นั่ง",
+    description: "ค้นหาบัตรลูกค้าเพื่อเปลี่ยนโต๊ะหรือที่นั่ง พร้อมส่งบัตร PDF ใหม่",
+    renderIcon: (className = "w-3.5 h-3.5") => <MapIcon className={className} />,
+  },
+  {
+    id: "users",
+    label: "สิทธิ์ผู้ใช้งาน",
+    description: "อนุมัติบัญชีผู้ใช้งานและกำหนดบทบาทแอดมิน สตาฟ หรือลูกค้า",
+    renderIcon: (className = "w-3.5 h-3.5") => <ShieldAlert className={className} />,
+  },
+  {
+    id: "logs",
+    label: "ประวัติสตาฟ",
+    description: "ตรวจสอบบันทึกการสแกน การรับเครื่องดื่ม และกิจกรรมเจ้าหน้าที่",
+    renderIcon: (className = "w-3.5 h-3.5") => <Activity className={className} />,
+  },
+  {
+    id: "emails",
+    label: "ติดตามอีเมล",
+    description: "ตรวจสอบสถานะการส่งอีเมลตั๋วและส่งอีเมลซ้ำกรณีตกหล่น",
+    renderIcon: (className = "w-3.5 h-3.5") => <Mail className={className} />,
+  },
+  {
+    id: "notifications",
+    label: "แจ้งเตือน SMS/LINE",
+    description: "ตั้งค่าการแจ้งเตือนผ่าน LINE และข้อความอัตโนมัติถึงลูกค้า",
+    renderIcon: (className = "w-3.5 h-3.5") => <MessageSquare className={className} />,
+  },
+  {
+    id: "slips",
+    label: "จัดการสลิป",
+    description: "ตรวจสอบและอนุมัติสลิปโอนเงินที่รอการยืนยันจากลูกค้า",
+    renderIcon: (className = "w-3.5 h-3.5") => <Banknote className={className} />,
+  },
+  {
+    id: "booths",
+    label: "บูธกิจกรรม & รายงาน",
+    description: "สร้างบูธ ตั้งค่าส่วนแบ่ง GP และดูรายงานสรุปยอดขายสุทธิ",
+    renderIcon: (className = "w-3.5 h-3.5") => <Store className={className} />,
+  },
+];
+
+const DEFAULT_ADMIN_TABS_ORDER: AdminTabId[] = ADMIN_TABS_CONFIG.map((t) => t.id);
+
+const ADMIN_TABS_BY_ID: Record<AdminTabId, AdminTabMeta> = ADMIN_TABS_CONFIG.reduce(
+  (acc, item) => {
+    acc[item.id] = item;
+    return acc;
+  },
+  {} as Record<AdminTabId, AdminTabMeta>
+);
+
+const normalizeAdminTabsOrder = (rawOrder?: unknown): AdminTabId[] => {
+  const validSet = new Set<string>(DEFAULT_ADMIN_TABS_ORDER);
+  const result: AdminTabId[] = [];
+  if (Array.isArray(rawOrder)) {
+    for (const item of rawOrder) {
+      if (typeof item === "string" && validSet.has(item) && !result.includes(item as AdminTabId)) {
+        result.push(item as AdminTabId);
+      }
+    }
+  }
+  for (const fallbackId of DEFAULT_ADMIN_TABS_ORDER) {
+    if (!result.includes(fallbackId)) {
+      result.push(fallbackId);
+    }
+  }
+  return result;
+};
+
+const areTabOrdersEqual = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((item, idx) => item === b[idx]);
 
 export default function AdminDashboardView({
   tables,
@@ -1201,70 +1306,170 @@ export default function AdminDashboardView({
   const [isSaving, setIsSaving] = useState(false);
   const [showTabDropdown, setShowTabDropdown] = useState(false);
 
-  const [userTabsOrder, setUserTabsOrder] = useState<string[]>([
-    "overview",
-    "move_seats",
-    "users",
-    "logs",
-    "emails",
-    "notifications",
-    "slips",
-    "booths",
-  ]);
+  const currentAdminUid = auth.currentUser?.uid || "default";
+  const savedFirestoreTabsOrder = useMemo(() => {
+    const perUserMap = config?.adminTabsOrders;
+    if (perUserMap && typeof perUserMap === "object" && Array.isArray(perUserMap[currentAdminUid])) {
+      return normalizeAdminTabsOrder(perUserMap[currentAdminUid]);
+    }
+    if (Array.isArray(config?.adminTabsOrder)) {
+      return normalizeAdminTabsOrder(config.adminTabsOrder);
+    }
+    return null;
+  }, [config?.adminTabsOrders, config?.adminTabsOrder, currentAdminUid]);
+
+  const [userTabsOrder, setUserTabsOrder] = useState<AdminTabId[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const uid = auth.currentUser?.uid;
+        if (uid) {
+          const stored = localStorage.getItem(`adminTabsOrder_${uid}`);
+          if (stored) {
+            return normalizeAdminTabsOrder(JSON.parse(stored));
+          }
+        }
+      } catch {
+        // ignore storage errors
+      }
+    }
+    return DEFAULT_ADMIN_TABS_ORDER;
+  });
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    const defaultTabsOrder = [
-      "overview",
-      "move_seats",
-      "users",
-      "logs",
-      "emails",
-      "notifications",
-      "slips",
-      "booths",
-    ];
-    if (uid) {
-      const stored = localStorage.getItem(`adminTabsOrder_${uid}`);
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          let modified = false;
-          if (!parsed.includes("users")) {
-            parsed.splice(1, 0, "users");
-            modified = true;
-          }
-          if (!parsed.includes("logs")) {
-            parsed.splice(2, 0, "logs");
-            modified = true;
-          }
-          if (!parsed.includes("move_seats")) {
-            parsed.splice(1, 0, "move_seats");
-            modified = true;
-          }
-          if (modified) {
-            setUserTabsOrder(parsed);
-            localStorage.setItem(
-              `adminTabsOrder_${uid}`,
-              JSON.stringify(parsed),
-            );
-          } else {
-            setUserTabsOrder(parsed);
-          }
-        } catch (e) {}
-      } else {
-        setUserTabsOrder(defaultTabsOrder);
+    if (savedFirestoreTabsOrder) {
+      setUserTabsOrder(savedFirestoreTabsOrder);
+      try {
+        if (auth.currentUser?.uid) {
+          localStorage.setItem(
+            `adminTabsOrder_${auth.currentUser.uid}`,
+            JSON.stringify(savedFirestoreTabsOrder)
+          );
+        }
+      } catch {
+        // ignore storage errors
       }
-    } else {
-      setUserTabsOrder(defaultTabsOrder);
+    } else if (auth.currentUser?.uid) {
+      try {
+        const stored = localStorage.getItem(`adminTabsOrder_${auth.currentUser.uid}`);
+        if (stored) {
+          setUserTabsOrder(normalizeAdminTabsOrder(JSON.parse(stored)));
+        }
+      } catch {
+        // ignore
+      }
     }
-  }, []);
+  }, [savedFirestoreTabsOrder, currentAdminUid]);
 
-  const handleUpdateTabsOrder = (newOrder: string[]) => {
-    setUserTabsOrder(newOrder);
-    const uid = auth.currentUser?.uid;
-    if (uid) {
-      localStorage.setItem(`adminTabsOrder_${uid}`, JSON.stringify(newOrder));
+  const [showTabOrderModal, setShowTabOrderModal] = useState(false);
+  const [draftTabsOrder, setDraftTabsOrder] = useState<AdminTabId[]>(DEFAULT_ADMIN_TABS_ORDER);
+  const [draggedTabId, setDraggedTabId] = useState<AdminTabId | null>(null);
+  const [dragOverTabId, setDragOverTabId] = useState<AdminTabId | null>(null);
+  const [isSavingTabOrder, setIsSavingTabOrder] = useState(false);
+
+  const openTabOrderModal = () => {
+    setDraftTabsOrder(normalizeAdminTabsOrder(userTabsOrder));
+    setDraggedTabId(null);
+    setDragOverTabId(null);
+    setShowTabDropdown(false);
+    setShowTabOrderModal(true);
+  };
+
+  const moveDraftTab = (index: number, direction: -1 | 1) => {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= draftTabsOrder.length) return;
+    setDraftTabsOrder((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const pinDraftTabToTop = (index: number) => {
+    if (index <= 0 || index >= draftTabsOrder.length) return;
+    setDraftTabsOrder((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.unshift(moved);
+      return next;
+    });
+  };
+
+  const handleDraftTabDrop = (targetId: AdminTabId) => {
+    if (!draggedTabId || draggedTabId === targetId) {
+      setDraggedTabId(null);
+      setDragOverTabId(null);
+      return;
+    }
+    setDraftTabsOrder((prev) => {
+      const fromIndex = prev.indexOf(draggedTabId);
+      const toIndex = prev.indexOf(targetId);
+      if (fromIndex === -1 || toIndex === -1) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+    setDraggedTabId(null);
+    setDragOverTabId(null);
+  };
+
+  const handleResetDraftTabsOrder = () => {
+    setDraftTabsOrder([...DEFAULT_ADMIN_TABS_ORDER]);
+  };
+
+  const handleRevertDraftTabsOrder = () => {
+    setDraftTabsOrder(normalizeAdminTabsOrder(userTabsOrder));
+  };
+
+  const isDraftTabsDirty = !areTabOrdersEqual(draftTabsOrder, userTabsOrder);
+  const isDraftTabsAtDefault = areTabOrdersEqual(draftTabsOrder, DEFAULT_ADMIN_TABS_ORDER);
+  const isSavedTabsAtDefault = areTabOrdersEqual(userTabsOrder, DEFAULT_ADMIN_TABS_ORDER);
+
+  const handleSaveTabsOrder = async () => {
+    const normalized = normalizeAdminTabsOrder(draftTabsOrder);
+    setIsSavingTabOrder(true);
+    try {
+      const uid = auth.currentUser?.uid;
+      if (uid) {
+        try {
+          localStorage.setItem(`adminTabsOrder_${uid}`, JSON.stringify(normalized));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      await setConfig((prev: any) => ({
+        ...prev,
+        adminTabsOrder: normalized,
+        adminTabsOrders: {
+          ...(prev?.adminTabsOrders || {}),
+          ...(uid ? { [uid]: normalized } : {}),
+        },
+        adminTabsOrderUpdatedAt: Date.now(),
+        adminTabsOrderUpdatedBy: auth.currentUser?.email || "Admin",
+      }));
+      setUserTabsOrder(normalized);
+      setShowTabOrderModal(false);
+      await logStaffAction(
+        "UPDATE_ADMIN_TABS_ORDER",
+        `Updated Admin menu bar order: ${normalized.map((id) => ADMIN_TABS_BY_ID[id]?.label || id).join(" -> ")}`
+      );
+      showToast({
+        type: "success",
+        title: "บันทึกลำดับเมนูบาร์เรียบร้อยแล้ว",
+        message: "การจัดเรียงเมนูของคุณถูกบันทึกถาวรทั้งในระบบและอุปกรณ์นี้แล้ว",
+      });
+    } catch (err) {
+      console.error("Save admin tabs order error:", err);
+      const friendly = getFriendlyFirestoreError(err);
+      showToast({
+        type: "error",
+        title: "ไม่สามารถบันทึกลำดับเมนูได้",
+        message: friendly.message,
+        details: friendly.details,
+      });
+    } finally {
+      setIsSavingTabOrder(false);
     }
   };
 
@@ -2008,315 +2213,160 @@ export default function AdminDashboardView({
         </div>
       </div>
 
-      {/* 2-Way Adaptive Navigation Bar: Auto-Shrinking Density Tabs & Quick-Jump Dropdown */}
+      {/* Clean Adaptive Navigation Bar with Dedicated Menu Customization & Quick-Jump Dropdown */}
       <div className="relative print:hidden mb-8 border-b border-slate-200">
-        <div className="flex items-center justify-between gap-2 md:gap-4">
-          {/* Scrollable, Draggable & Dynamic Sizing Tab Group */}
-          <div className="flex-1 flex gap-1 sm:gap-2 overflow-x-auto whitespace-nowrap hide-scroll-bar no-scrollbar pb-1 scroll-smooth">
-            {(() => {
-              const defaultTabsOrder = [
-                "overview",
-                "move_seats",
-                "users",
-                "logs",
-                "emails",
-                "notifications",
-                "slips",
-                "booths",
-              ];
-              const currentOrder = userTabsOrder || defaultTabsOrder;
+        <div className="flex items-center justify-between gap-2 md:gap-3">
+          {/* Clean Scrollable Tab Group */}
+          <div className="flex-1 flex items-end gap-1 sm:gap-2 overflow-x-auto whitespace-nowrap hide-scroll-bar no-scrollbar scroll-smooth">
+            {normalizeAdminTabsOrder(userTabsOrder).map((tabId) => {
+              const meta = ADMIN_TABS_BY_ID[tabId];
+              if (!meta) return null;
+              const isActive = activeTab === tabId;
 
-              const handleDragStart = (e: React.DragEvent, index: number) => {
-                e.dataTransfer.setData("tabIndex", index.toString());
-              };
-
-              const handleDrop = (e: React.DragEvent, targetIndex: number) => {
-                e.preventDefault();
-                const sourceIndexStr = e.dataTransfer.getData("tabIndex");
-                if (!sourceIndexStr) return;
-                const sourceIndex = parseInt(sourceIndexStr);
-                if (isNaN(sourceIndex) || sourceIndex === targetIndex) return;
-                const newOrder = [...currentOrder];
-                const [removed] = newOrder.splice(sourceIndex, 1);
-                newOrder.splice(targetIndex, 0, removed);
-                handleUpdateTabsOrder(newOrder);
-              };
-
-              const handleDragOver = (e: React.DragEvent) => {
-                e.preventDefault();
-              };
-
-              const moveTab = (e: React.MouseEvent, index: number, dir: number) => {
-                e.stopPropagation();
-                const newOrder = [...currentOrder];
-                const targetIndex = index + dir;
-                if (targetIndex < 0 || targetIndex >= newOrder.length) return;
-                const temp = newOrder[index];
-                newOrder[index] = newOrder[targetIndex];
-                newOrder[targetIndex] = temp;
-                handleUpdateTabsOrder(newOrder);
-              };
-
-              // ensure default tabs exist if added later
-              const fullOrder = [...currentOrder];
-              defaultTabsOrder.forEach((id) => {
-                if (!fullOrder.includes(id)) fullOrder.push(id);
-              });
-
-              const numTabs = fullOrder.length;
-              // Dynamically adjust styles based on the number of tabs to prevent overflow/cluttering
-              const textClass = 
-                numTabs > 6 ? "text-[10px] sm:text-xs md:text-[13px]" : 
-                numTabs > 5 ? "text-xs sm:text-sm md:text-sm" : 
-                "text-xs sm:text-sm md:text-base";
-
-              const paddingClass = 
-                numTabs > 6 ? "pb-2 px-1 sm:px-1.5 md:px-2.5" : 
-                numTabs > 5 ? "pb-2 px-1.5 sm:px-2 md:px-3" : 
-                "pb-2 px-2 md:px-3.5";
-
-              const gapClass = 
-                numTabs > 6 ? "gap-0.5 sm:gap-1" : 
-                "gap-1";
-
-              const renderTab = (tabId: string, index: number) => {
-                const isActive = activeTab === tabId;
-                let icon = null;
-                let label = "";
-
-                if (tabId === "overview") {
-                  label = "ภาพรวม & ตั้งค่า";
-                  icon = (
-                    <LayoutGrid className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
-                  );
-                } else if (tabId === "users") {
-                  label = "สิทธิ์ผู้ใช้งาน";
-                  icon = (
-                    <ShieldAlert className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
-                  );
-                } else if (tabId === "logs") {
-                  label = "ประวัติสตาฟ";
-                  icon = (
-                    <Activity className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
-                  );
-                } else if (tabId === "emails") {
-                  label = "ติดตามอีเมล";
-                  icon = (
-                    <Mail className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
-                  );
-                } else if (tabId === "notifications") {
-                  label = "แจ้งเตือน SMS/LINE";
-                  icon = (
-                    <svg
-                      className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                  );
-                } else if (tabId === "slips") {
-                  label = "จัดการสลิป";
-                  icon = (
-                    <Banknote className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
-                  );
-                } else if (tabId === "booths") {
-                  label = "บูธกิจกรรม & รายงาน";
-                  icon = (
-                    <Store className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
-                  );
-                } else if (tabId === "move_seats") {
-                  label = "จัดการย้ายที่นั่ง";
-                  icon = (
-                    <MapIcon className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
-                  );
-                }
-
-                return (
-                  <div
-                    key={tabId}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, index)}
-                    onDrop={(e) => handleDrop(e, index)}
-                    onDragOver={handleDragOver}
-                    className="flex items-center gap-0.5 group"
-                  >
-                    <div
-                      className={`flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ${isActive ? "opacity-100" : ""}`}
-                    >
-                      {index > 0 && (
-                        <button
-                          type="button"
-                          onClick={(e) => moveTab(e, index, -1)}
-                          className="p-0.5 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-700 text-[10px]"
-                          title="เลื่อนไปทางซ้าย"
-                        >
-                          &larr;
-                        </button>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab(tabId as any)}
-                      className={`${paddingClass} font-bold ${textClass} transition-all border-b-2 flex items-center ${gapClass} cursor-grab active:cursor-grabbing shrink-0 ${isActive ? "border-primary text-primary" : "border-transparent text-slate-500 hover:text-slate-800"}`}
-                    >
-                      <span
-                        className="cursor-move mr-0.5 opacity-20 hover:opacity-100 text-[10px]"
-                        title="ลากเพื่อเรียงลำดับ"
-                      >
-                        ⋮⋮
-                      </span>
-                      {icon}
-                      <span>{label}</span>
-                      {tabId === "emails" && pendingEmails?.length ? (
-                        <span className="bg-primary text-white text-[9px] px-1.5 py-0.5 rounded-full shrink-0 font-bold ml-0.5">
-                          {pendingEmails.length}
-                        </span>
-                      ) : null}
-                      {tabId === "users" && pendingUsersCount > 0 ? (
-                        <span className="bg-rose-500 text-white text-[9px] px-1.5 py-0.5 rounded-full shrink-0 font-bold ml-0.5 animate-pulse">
-                          {pendingUsersCount}
-                        </span>
-                      ) : null}
-                    </button>
-
-                    <div
-                      className={`flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ${isActive ? "opacity-100" : ""}`}
-                    >
-                      {index < currentOrder.length - 1 && (
-                        <button
-                          type="button"
-                          onClick={(e) => moveTab(e, index, 1)}
-                          className="p-0.5 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-700 text-[10px]"
-                          title="เลื่อนไปทางขวา"
-                        >
-                          &rarr;
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              };
-
-              return fullOrder.map((id, index) => renderTab(id, index));
-            })()}
-          </div>
-
-          {/* Quick-Jump Dropdown Section (Alternative Presentation for many tabs) */}
-          {(() => {
-            const defaultTabsOrder = [
-              "overview",
-              "users",
-              "logs",
-              "emails",
-              "notifications",
-              "slips",
-              "booths",
-            ];
-            const currentOrder = userTabsOrder || defaultTabsOrder;
-            const fullOrder = [...currentOrder];
-            defaultTabsOrder.forEach((id) => {
-              if (!fullOrder.includes(id)) fullOrder.push(id);
-            });
-
-            return (
-              <div className="relative pl-1 shrink-0 pb-2">
+              return (
                 <button
+                  key={tabId}
                   type="button"
-                  onClick={() => setShowTabDropdown(!showTabDropdown)}
-                  className="relative flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-black transition-all shadow-sm active:scale-95 cursor-pointer"
-                  title="เปิดเมนูลัดสลับหน้าจออย่างรวดเร็ว"
+                  onClick={() => setActiveTab(tabId)}
+                  className={`group relative pb-3 pt-1.5 px-2.5 sm:px-3 text-xs sm:text-[13px] font-bold transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                    isActive
+                      ? "border-primary text-primary"
+                      : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
+                  }`}
                 >
-                  <LayoutGrid className="w-3.5 h-3.5 text-slate-500" />
-                  <span className="hidden sm:inline">เมนูด่วน</span>
-                  {pendingUsersCount > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[9px] font-black w-4 h-4 flex items-center justify-center rounded-full animate-bounce shadow-sm">
+                  <span
+                    className={`transition-colors shrink-0 ${
+                      isActive
+                        ? "text-primary"
+                        : "text-slate-400 group-hover:text-slate-600"
+                    }`}
+                  >
+                    {meta.renderIcon("w-3.5 h-3.5")}
+                  </span>
+                  <span className="whitespace-nowrap">{meta.label}</span>
+                  {tabId === "emails" && pendingEmails?.length ? (
+                    <span className="bg-primary text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full shrink-0 font-bold tabular-nums">
+                      {pendingEmails.length}
+                    </span>
+                  ) : null}
+                  {tabId === "users" && pendingUsersCount > 0 ? (
+                    <span className="bg-rose-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full shrink-0 font-bold tabular-nums">
                       {pendingUsersCount}
                     </span>
-                  )}
-                  <ChevronDown className={`w-3.5 h-3.5 text-slate-500 transition-transform duration-200 ${showTabDropdown ? "rotate-180" : ""}`} />
+                  ) : null}
                 </button>
+              );
+            })}
+          </div>
 
-                {showTabDropdown && (
-                  <>
-                    <div 
-                      className="fixed inset-0 z-40 bg-transparent" 
-                      onClick={() => setShowTabDropdown(false)}
-                    />
-                    <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200/80 rounded-2xl shadow-xl py-2.5 z-50 animate-in fade-in slide-in-from-top-2">
-                      <div className="px-3.5 py-1 text-[10px] uppercase font-black tracking-wider text-slate-400 border-b border-rose-50 mb-1.5">
-                        เลือกเมนูแอดมินลัด
-                      </div>
-                      {fullOrder.map((id) => {
+          {/* Right Controls: Customize Order Button + Quick-Jump Dropdown */}
+          <div className="flex items-center gap-2 shrink-0 pb-2">
+            <button
+              type="button"
+              onClick={openTabOrderModal}
+              className="flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
+              title="ปรับแต่งและจัดเรียงลำดับเมนูบาร์"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span className="hidden md:inline">จัดเรียงเมนู</span>
+            </button>
+
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowTabDropdown(!showTabDropdown)}
+                className="relative flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-black transition-all shadow-sm active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
+                title="เปิดเมนูลัดสลับหน้าจออย่างรวดเร็ว"
+              >
+                <LayoutGrid className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                <span className="hidden sm:inline">เมนูด่วน</span>
+                {pendingUsersCount > 0 && (
+                  <span className="bg-rose-500 text-white text-[10px] leading-none font-black px-1.5 py-0.5 rounded-full tabular-nums">
+                    {pendingUsersCount}
+                  </span>
+                )}
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-slate-500 transition-transform duration-200 shrink-0 ${
+                    showTabDropdown ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
+
+              {showTabDropdown && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40 bg-transparent"
+                    onClick={() => setShowTabDropdown(false)}
+                  />
+                  <div className="absolute right-0 mt-2 w-60 bg-white border border-slate-200 rounded-2xl shadow-xl py-2 z-50 animate-in fade-in slide-in-from-top-2">
+                    <div className="px-3.5 py-1.5 text-[10px] uppercase font-black tracking-wider text-slate-400 border-b border-slate-100 mb-1 flex items-center justify-between">
+                      <span>เมนูลัดแอดมิน</span>
+                      <span className="tabular-nums font-bold">
+                        {DEFAULT_ADMIN_TABS_ORDER.length} เมนู
+                      </span>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto py-0.5">
+                      {normalizeAdminTabsOrder(userTabsOrder).map((id) => {
+                        const meta = ADMIN_TABS_BY_ID[id];
+                        if (!meta) return null;
                         const isActive = activeTab === id;
-                        let label = "";
-                        let icon = null;
-                        if (id === "overview") {
-                          label = "ภาพรวม & ตั้งค่า";
-                          icon = <LayoutGrid className="w-3.5 h-3.5" />;
-                        } else if (id === "users") {
-                          label = "สิทธิ์ผู้ใช้งาน";
-                          icon = <ShieldAlert className="w-3.5 h-3.5" />;
-                        } else if (id === "logs") {
-                          label = "ประวัติสตาฟ";
-                          icon = <Activity className="w-3.5 h-3.5" />;
-                        } else if (id === "emails") {
-                          label = "ติดตามอีเมล";
-                          icon = <Mail className="w-3.5 h-3.5" />;
-                        } else if (id === "notifications") {
-                          label = "แจ้งเตือน SMS/LINE";
-                          icon = (
-                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                            </svg>
-                          );
-                        } else if (id === "slips") {
-                          label = "จัดการสลิป";
-                          icon = <Banknote className="w-3.5 h-3.5" />;
-                        } else if (id === "booths") {
-                          label = "บูธกิจกรรม & รายงาน";
-                          icon = <Store className="w-3.5 h-3.5" />;
-                        } else if (id === "move_seats") {
-                          label = "จัดการย้ายที่นั่ง";
-                          icon = <MapIcon className="w-3.5 h-3.5" />;
-                        }
 
                         return (
                           <button
                             key={id}
                             type="button"
                             onClick={() => {
-                              setActiveTab(id as any);
+                              setActiveTab(id);
                               setShowTabDropdown(false);
                             }}
-                            className={`w-full text-left px-4 py-2 text-xs font-bold transition flex items-center justify-between ${
-                              isActive 
-                                ? "bg-rose-50/60 text-rose-600 font-extrabold" 
+                            className={`w-full text-left px-3.5 py-2 text-xs font-bold transition flex items-center justify-between gap-2 whitespace-nowrap ${
+                              isActive
+                                ? "bg-rose-50/70 text-rose-600 font-extrabold"
                                 : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                             }`}
                           >
-                            <span className="flex items-center gap-2 relative">
-                              <span className={`${isActive ? "text-rose-500" : "text-slate-400"}`}>{icon}</span>
-                              {label}
+                            <span className="flex items-center gap-2 min-w-0">
+                              <span
+                                className={`shrink-0 ${
+                                  isActive ? "text-rose-500" : "text-slate-400"
+                                }`}
+                              >
+                                {meta.renderIcon("w-3.5 h-3.5")}
+                              </span>
+                              <span className="truncate">{meta.label}</span>
                               {id === "users" && pendingUsersCount > 0 && (
-                                <span className="bg-rose-500 text-white text-[9px] font-black w-4 h-4 flex items-center justify-center rounded-full ml-1">
+                                <span className="bg-rose-500 text-white text-[10px] leading-none font-black px-1.5 py-0.5 rounded-full tabular-nums shrink-0">
                                   {pendingUsersCount}
                                 </span>
                               )}
+                              {id === "emails" && pendingEmails?.length ? (
+                                <span className="bg-primary text-white text-[10px] leading-none font-black px-1.5 py-0.5 rounded-full tabular-nums shrink-0">
+                                  {pendingEmails.length}
+                                </span>
+                              ) : null}
                             </span>
-                            {isActive && <span className="w-2 h-2 rounded-full bg-rose-500" />}
+                            {isActive && (
+                              <Check className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                            )}
                           </button>
                         );
                       })}
                     </div>
-                  </>
-                )}
-              </div>
-            );
-          })()}
+                    <div className="border-t border-slate-100 mt-1.5 pt-1.5 px-2">
+                      <button
+                        type="button"
+                        onClick={openTabOrderModal}
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-700 hover:text-primary hover:bg-slate-50 transition whitespace-nowrap cursor-pointer"
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                        <span>ปรับแต่งลำดับเมนูบาร์</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -9225,6 +9275,261 @@ export default function AdminDashboardView({
                   customConfirm.confirmText
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Customize Admin Menu Bar Order Modal */}
+      {showTabOrderModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9998]">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-100 overflow-hidden animate-scale-up flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-slate-100 flex items-start justify-between gap-4 bg-slate-50/60">
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                  <SlidersHorizontal className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-900 leading-snug">
+                    ปรับแต่งลำดับเมนูบาร์แอดมิน
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                    ลากวางที่แถบเมนู หรือใช้ปุ่มลูกศร ขึ้น / ลง เพื่อเรียงลำดับแท็บที่ใช้งานบ่อยให้อยู่ด้านหน้า
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isSavingTabOrder}
+                onClick={() => setShowTabOrderModal(false)}
+                className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-xl transition shrink-0 disabled:opacity-50"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Live Preview Bar */}
+            <div className="px-6 py-3.5 bg-slate-50 border-b border-slate-100">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  ตัวอย่างการแสดงผลเมนูบาร์จริง
+                </span>
+                {isDraftTabsDirty ? (
+                  <span className="text-[11px] font-bold text-amber-600">
+                    มีการปรับลำดับใหม่ (รอการบันทึก)
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-medium text-slate-400">
+                    ตรงกับลำดับที่ใช้งานอยู่
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+                {draftTabsOrder.map((tabId, idx) => {
+                  const meta = ADMIN_TABS_BY_ID[tabId];
+                  if (!meta) return null;
+                  const isCurrentTab = activeTab === tabId;
+                  return (
+                    <div
+                      key={tabId}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[11px] font-bold whitespace-nowrap shrink-0 transition-all ${
+                        isCurrentTab
+                          ? "bg-rose-50 border-rose-200 text-rose-700"
+                          : "bg-white border-slate-200 text-slate-600"
+                      }`}
+                    >
+                      <span className="text-[10px] font-extrabold text-slate-400 tabular-nums">
+                        {idx + 1}.
+                      </span>
+                      {meta.renderIcon("w-3 h-3 shrink-0")}
+                      <span>{meta.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Reorderable List */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-2.5 flex-1">
+              {draftTabsOrder.map((tabId, index) => {
+                const meta = ADMIN_TABS_BY_ID[tabId];
+                if (!meta) return null;
+                const isDragged = draggedTabId === tabId;
+                const isDropTarget = dragOverTabId === tabId && draggedTabId !== tabId;
+                const isFirst = index === 0;
+                const isLast = index === draftTabsOrder.length - 1;
+                const isCurrentActive = activeTab === tabId;
+
+                return (
+                  <div
+                    key={tabId}
+                    draggable={!isSavingTabOrder}
+                    onDragStart={(e) => {
+                      setDraggedTabId(tabId);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", tabId);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dragOverTabId !== tabId) {
+                        setDragOverTabId(tabId);
+                      }
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverTabId === tabId) {
+                        setDragOverTabId(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleDraftTabDrop(tabId);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedTabId(null);
+                      setDragOverTabId(null);
+                    }}
+                    className={`flex items-center justify-between gap-3 p-3 sm:px-4 sm:py-3 rounded-2xl border transition-all select-none ${
+                      isDragged
+                        ? "opacity-45 border-dashed border-slate-300 bg-slate-50"
+                        : isDropTarget
+                        ? "border-primary bg-rose-50/50 ring-2 ring-primary/20 shadow-sm"
+                        : isCurrentActive
+                        ? "border-rose-200 bg-rose-50/25 hover:border-rose-300"
+                        : "border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <span
+                        className="p-1 text-slate-300 hover:text-slate-500 cursor-grab active:cursor-grabbing shrink-0"
+                        title="ลากเพื่อเปลี่ยนลำดับ"
+                      >
+                        <GripVertical className="w-4 h-4" />
+                      </span>
+
+                      <span className="w-7 h-7 rounded-xl bg-slate-100 text-slate-600 text-xs font-black flex items-center justify-center shrink-0 tabular-nums">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+
+                      <div
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                          isCurrentActive
+                            ? "bg-rose-100 text-rose-600"
+                            : "bg-slate-100 text-slate-600"
+                        }`}
+                      >
+                        {meta.renderIcon("w-4 h-4")}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-extrabold text-slate-800 truncate">
+                            {meta.label}
+                          </span>
+                          {isCurrentActive && (
+                            <span className="text-[10px] font-bold text-rose-600 bg-rose-100/80 px-2 py-0.5 rounded-md whitespace-nowrap">
+                              หน้าปัจจุบัน
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                          {meta.description}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Precision Nudge Controls */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        disabled={isFirst || isSavingTabOrder}
+                        onClick={() => pinDraftTabToTop(index)}
+                        className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                        title="ย้ายไปลำดับแรกสุด"
+                        aria-label={`ย้าย ${meta.label} ไปลำดับแรกสุด`}
+                      >
+                        <ChevronsUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isFirst || isSavingTabOrder}
+                        onClick={() => moveDraftTab(index, -1)}
+                        className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                        title="เลื่อนขึ้น"
+                        aria-label={`เลื่อน ${meta.label} ขึ้น`}
+                      >
+                        <ChevronUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isLast || isSavingTabOrder}
+                        onClick={() => moveDraftTab(index, 1)}
+                        className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                        title="เลื่อนลง"
+                        aria-label={`เลื่อน ${meta.label} ลง`}
+                      >
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/70 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  disabled={isDraftTabsAtDefault || isSavingTabOrder}
+                  onClick={handleResetDraftTabsOrder}
+                  className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition whitespace-nowrap cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                  <span>รีเซ็ตค่าเริ่มต้น</span>
+                </button>
+                {isDraftTabsDirty && !isSavedTabsAtDefault && (
+                  <button
+                    type="button"
+                    disabled={isSavingTabOrder}
+                    onClick={handleRevertDraftTabsOrder}
+                    className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-xs font-bold transition whitespace-nowrap cursor-pointer disabled:opacity-40"
+                  >
+                    คืนค่าที่บันทึกล่าสุด
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 sm:justify-end">
+                <button
+                  type="button"
+                  disabled={isSavingTabOrder}
+                  onClick={() => setShowTabOrderModal(false)}
+                  className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-slate-200/70 hover:bg-slate-200 text-slate-700 text-xs font-bold transition whitespace-nowrap cursor-pointer disabled:opacity-50"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  disabled={isSavingTabOrder}
+                  onClick={handleSaveTabsOrder}
+                  className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-primary hover:bg-rose-700 text-white text-xs font-bold shadow-md transition flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer disabled:opacity-70 disabled:cursor-wait"
+                >
+                  {isSavingTabOrder ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                      <span>กำลังบันทึก...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3.5 h-3.5 shrink-0" />
+                      <span>บันทึกลำดับเมนู</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
