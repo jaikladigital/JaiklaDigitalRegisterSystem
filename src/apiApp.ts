@@ -525,6 +525,156 @@ apiRouter.post('/notify', async (req, res) => {
   }
 });
 
+// Location Search Proxy (OpenStreetMap Nominatim)
+apiRouter.get('/location/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q || q.length < 2) {
+      return res.status(400).json({ error: 'กรุณาระบุคำค้นหาอย่างน้อย 2 ตัวอักษร' });
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    const searchUrl = new URL('https://nominatim.openstreetmap.org/search');
+    searchUrl.searchParams.set('format', 'json');
+    searchUrl.searchParams.set('q', q);
+    searchUrl.searchParams.set('limit', '6');
+    searchUrl.searchParams.set('addressdetails', '1');
+    searchUrl.searchParams.set('accept-language', 'th,en');
+
+    const response = await fetch(searchUrl.toString(), {
+      headers: {
+        'User-Agent': 'EventTicketingPro/1.0 (venue-location-picker)',
+        Accept: 'application/json',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return res.status(502).json({ error: `Geocoding service returned ${response.status}` });
+    }
+
+    const data = await response.json();
+    const results = Array.isArray(data)
+      ? data.map((item: any) => ({
+          placeId: String(item.place_id || ''),
+          displayName: String(item.display_name || ''),
+          lat: Number(item.lat),
+          lng: Number(item.lon),
+          type: String(item.type || item.class || ''),
+        })).filter((item: any) => !isNaN(item.lat) && !isNaN(item.lng))
+      : [];
+
+    return res.json({ results });
+  } catch (error: any) {
+    console.error('Location search error:', error);
+    return res.status(500).json({ error: error?.name === 'AbortError' ? 'หมดเวลาการค้นหาสถานที่' : (error.message || 'ไม่สามารถค้นหาสถานที่ได้') });
+  }
+});
+
+// Safe Google Maps Short-URL Resolver
+apiRouter.post('/location/resolve-url', async (req, res) => {
+  try {
+    const rawUrl = String(req.body?.url || '').trim();
+    if (!rawUrl) {
+      return res.status(400).json({ error: 'กรุณาระบุ URL' });
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return res.status(400).json({ error: 'รูปแบบลิงก์ไม่ถูกต้อง' });
+    }
+
+    const allowedHosts = new Set([
+      'maps.app.goo.gl',
+      'goo.gl',
+      'maps.google.com',
+      'www.google.com',
+      'google.com',
+      'maps.google.co.th',
+      'www.google.co.th',
+    ]);
+
+    if (!['https:', 'http:'].includes(parsed.protocol) || !allowedHosts.has(parsed.hostname.toLowerCase())) {
+      return res.status(400).json({ error: 'รองรับเฉพาะลิงก์จาก Google Maps เท่านั้น' });
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 7000);
+    const response = await fetch(parsed.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; EventTicketingPro/1.0)',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    let htmlSnippet = '';
+    try {
+      const text = await response.text();
+      htmlSnippet = text.slice(0, 12000);
+    } catch {
+      // ignore body read errors
+    }
+
+    return res.json({
+      resolvedUrl: response.url || rawUrl,
+      htmlSnippet,
+    });
+  } catch (error: any) {
+    console.error('Resolve map URL error:', error);
+    return res.status(500).json({ error: 'ไม่สามารถเปิดลิงก์ย่อได้ กรุณาคัดลอกลิงก์เต็มจากแถบที่อยู่ของเบราว์เซอร์' });
+  }
+});
+
+// Approximate IP Geolocation Fallback (when browser GPS is unavailable)
+apiRouter.get('/location/ip-approx', async (req, res) => {
+  try {
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const isPrivateIp =
+      !forwarded ||
+      forwarded === '::1' ||
+      forwarded.startsWith('127.') ||
+      forwarded.startsWith('10.') ||
+      forwarded.startsWith('192.168.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(forwarded);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const targetUrl = isPrivateIp
+      ? 'https://ipwho.is/'
+      : `https://ipwho.is/${encodeURIComponent(forwarded)}`;
+
+    const response = await fetch(targetUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return res.status(502).json({ error: 'IP geolocation unavailable' });
+    }
+    const data: any = await response.json();
+    if (!data?.success || typeof data.latitude !== 'number' || typeof data.longitude !== 'number') {
+      return res.status(404).json({ error: 'ไม่พบพิกัดจากเครือข่าย' });
+    }
+
+    return res.json({
+      lat: data.latitude,
+      lng: data.longitude,
+      city: data.city || '',
+      region: data.region || '',
+      country: data.country || '',
+    });
+  } catch (error: any) {
+    console.error('IP approx error:', error);
+    return res.status(500).json({ error: 'ไม่สามารถประมาณการตำแหน่งจากเครือข่ายได้' });
+  }
+});
+
 // Mount the API router on both /api and root level
 app.use('/api', apiRouter);
 app.use(apiRouter);

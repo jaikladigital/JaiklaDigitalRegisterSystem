@@ -11,6 +11,7 @@ import { onSnapshot, doc, collection, addDoc, getDocs, deleteDoc, setDoc } from 
 import { db, auth, handleFirestoreError, OperationType } from './lib/firebase';
 import { logStaffAction } from './lib/logger';
 import { addTicket, updateTicket, updateTable, deleteTable, addSurvey, addLuckyDrawWinner, updateLuckyDrawWinner, updateConfig } from './lib/firebaseCollections';
+import { getResilientLocation, isValidCoordinates } from './utils/locationHelpers';
 
 
 import { ConfigContext, translations } from './ConfigContext';
@@ -70,7 +71,9 @@ const DEFAULT_CONFIG = {
   consentDataTypes: 'ชื่อ-นามสกุล, เบอร์โทรศัพท์, อีเมล, รูปภาพ',
   consentPurpose: 'ดำเนินกิจกรรม',
   boothGpPercent: 15,
-  adminTabsOrder: ['overview', 'move_seats', 'users', 'logs', 'emails', 'notifications', 'slips', 'booths']
+  adminTabsOrder: ['overview', 'move_seats', 'users', 'logs', 'emails', 'notifications', 'slips', 'booths'],
+  eventRadiusKm: 2,
+  eventLocationName: ''
 };
 
 export default function App() {
@@ -139,6 +142,14 @@ export default function App() {
   const t = (text: string) => language === 'en' ? translations.en[text] || text : text;
   
   const [config, setConfig] = useState<any>({ ...DEFAULT_CONFIG, zones: ZONES });
+  const [themePreview, setThemePreview] = useState<{
+    themeColor?: string;
+    secondaryColor?: string;
+    accentColor?: string;
+    enableSecondaryColor?: boolean;
+    enableAccentColor?: boolean;
+  } | null>(null);
+  const [surveyAlertModal, setSurveyAlertModal] = useState<{ title: string; message: string } | null>(null);
 
   useEffect(() => {
     const unsubConfig = onSnapshot(doc(db, 'config', 'main'), (docSnap) => {
@@ -603,9 +614,13 @@ export default function App() {
       `}} />
       <div 
         style={{
-          '--theme-primary': config.themeColor,
-          '--theme-secondary': config.enableSecondaryColor ? config.secondaryColor : config.themeColor,
-          '--theme-accent': config.enableAccentColor ? config.accentColor : config.themeColor
+          '--theme-primary': (view === 'ADMIN' && themePreview?.themeColor) ? themePreview.themeColor : config.themeColor,
+          '--theme-secondary': ((view === 'ADMIN' && themePreview) ? themePreview.enableSecondaryColor : config.enableSecondaryColor)
+            ? ((view === 'ADMIN' && themePreview?.secondaryColor) ? themePreview.secondaryColor : config.secondaryColor)
+            : ((view === 'ADMIN' && themePreview?.themeColor) ? themePreview.themeColor : config.themeColor),
+          '--theme-accent': ((view === 'ADMIN' && themePreview) ? themePreview.enableAccentColor : config.enableAccentColor)
+            ? ((view === 'ADMIN' && themePreview?.accentColor) ? themePreview.accentColor : config.accentColor)
+            : ((view === 'ADMIN' && themePreview?.themeColor) ? themePreview.themeColor : config.themeColor)
         } as React.CSSProperties} 
         className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24 md:pb-0 print:bg-white print:pb-0 print:min-h-0 print:h-auto print:overflow-visible"
       >
@@ -876,7 +891,7 @@ export default function App() {
                updated.checkedInSeats = [...ticket.seatIds];
                await updateTicket(ticket.id, updated);
             }}
-            onTakeSurvey={(ticket, seatId) => {
+            onTakeSurvey={async (ticket, seatId) => {
               // Bypass restrictions if in Test Mode
               if (config.surveyTestMode) {
                 setSurveySourceView('TICKETS');
@@ -899,43 +914,40 @@ export default function App() {
               
               // 2. Check Location
               if (config.eventLat && config.eventLng) {
-                if (navigator.geolocation) {
-                  navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                      const lat1 = position.coords.latitude;
-                      const lon1 = position.coords.longitude;
-                      const lat2 = parseFloat(config.eventLat);
-                      const lon2 = parseFloat(config.eventLng);
-                      
-                      const R = 6371e3; // metres
-                      const p1 = lat1 * Math.PI/180;
-                      const p2 = lat2 * Math.PI/180;
-                      const dp = (lat2-lat1) * Math.PI/180;
-                      const dl = (lon2-lon1) * Math.PI/180;
+                const lat2 = parseFloat(config.eventLat);
+                const lon2 = parseFloat(config.eventLng);
+                if (isValidCoordinates(lat2, lon2)) {
+                  const geoRes = await getResilientLocation({ allowIpFallback: false });
+                  if (!geoRes.ok || typeof geoRes.lat !== 'number' || typeof geoRes.lng !== 'number') {
+                    setSurveyAlertModal({
+                      title: 'ไม่สามารถตรวจสอบตำแหน่งสถานที่จัดงานได้',
+                      message: geoRes.message || t('ไม่สามารถระบุตำแหน่งของคุณได้ กรุณาเปิด GPS'),
+                    });
+                    return;
+                  }
 
-                      const a = Math.sin(dp/2) * Math.sin(dp/2) +
-                                Math.cos(p1) * Math.cos(p2) *
-                                Math.sin(dl/2) * Math.sin(dl/2);
-                      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-                      const d = R * c;
+                  const lat1 = geoRes.lat;
+                  const lon1 = geoRes.lng;
+                  const R = 6371e3; // metres
+                  const p1 = (lat1 * Math.PI) / 180;
+                  const p2 = (lat2 * Math.PI) / 180;
+                  const dp = ((lat2 - lat1) * Math.PI) / 180;
+                  const dl = ((lon2 - lon1) * Math.PI) / 180;
 
-                      if (d > 2000) { // 2km radius
-                        alert(t('คุณไม่ได้อยู่ในสถานที่จัดกิจกรรม (ระยะเกิน 2 กม.)'));
-                        return;
-                      }
+                  const a =
+                    Math.sin(dp / 2) * Math.sin(dp / 2) +
+                    Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+                  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                  const d = R * c;
+                  const maxRadiusKm = Number(config.eventRadiusKm) > 0 ? Number(config.eventRadiusKm) : 2;
 
-                      setSurveySourceView('TICKETS');
-                      setActiveTicketForSurvey({ticket, seatId});
-                      setView('SURVEY');
-                    },
-                    (error) => {
-                      alert(t('ไม่สามารถระบุตำแหน่งของคุณได้ กรุณาเปิด GPS'));
-                    }
-                  );
-                  return; // Don't proceed yet, wait for geolocation callback
-                } else {
-                  alert(t('เบราว์เซอร์ของคุณไม่รองรับการตรวจสอบสถานที่'));
-                  return;
+                  if (d > maxRadiusKm * 1000) {
+                    setSurveyAlertModal({
+                      title: 'อยู่นอกพื้นที่จัดกิจกรรม',
+                      message: `คุณอยู่ห่างจากสถานที่จัดงานประมาณ ${(d / 1000).toFixed(2)} กม. (กำหนดรัศมีไม่เกิน ${maxRadiusKm} กม.)`,
+                    });
+                    return;
+                  }
                 }
               }
 
@@ -1083,6 +1095,7 @@ export default function App() {
               onResetApp={handleResetApp} 
               booths={booths}
               boothScanLogs={boothScanLogs}
+              onPreviewTheme={setThemePreview}
             />
           </AuthView>
         )}
@@ -1122,6 +1135,22 @@ export default function App() {
           buttonText={config.emailSurveyButtonText}
           buttonFontSize={config.emailSurveyButtonFontSize}
         />
+      )}
+
+      {surveyAlertModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999]">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-scale-up">
+            <h4 className="text-base font-extrabold text-slate-900 mb-2">{surveyAlertModal.title}</h4>
+            <p className="text-sm text-slate-600 leading-relaxed mb-5">{surveyAlertModal.message}</p>
+            <button
+              type="button"
+              onClick={() => setSurveyAlertModal(null)}
+              className="w-full py-2.5 rounded-xl bg-primary hover:bg-primary-hover text-white font-bold text-sm transition cursor-pointer"
+            >
+              ตกลง
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Mobile Nav */}

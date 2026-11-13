@@ -55,6 +55,14 @@ import {
   SlidersHorizontal,
   MessageSquare,
   Check,
+  Search,
+  MapPin,
+  Compass,
+  Link2,
+  Sparkles,
+  Eye,
+  AlertTriangle,
+  Crosshair,
   Lock,
   Timer,
   CheckCircle2,
@@ -62,6 +70,18 @@ import {
   Info,
   X,
 } from "lucide-react";
+import {
+  buildOpenStreetMapEmbedUrl,
+  getResilientLocation,
+  isValidCoordinates,
+  parseCoordinatesFromText,
+} from "../utils/locationHelpers";
+import {
+  THEME_PRESETS,
+  getContrastFeedback,
+  isValidHexColor,
+  normalizeHexColor,
+} from "../utils/themeHelpers";
 import { motion } from "motion/react";
 import { SURVEY_TOPICS } from "./SurveyView";
 import { ConfigContext } from "../ConfigContext";
@@ -679,6 +699,7 @@ export default function AdminDashboardView({
   onResetApp,
   booths = [],
   boothScanLogs = [],
+  onPreviewTheme,
 }: {
   tables: Table[];
   setTables?: any;
@@ -691,12 +712,41 @@ export default function AdminDashboardView({
   onResetApp?: () => void;
   booths?: any[];
   boothScanLogs?: any[];
+  onPreviewTheme?: (preview: {
+    themeColor?: string;
+    secondaryColor?: string;
+    accentColor?: string;
+    enableSecondaryColor?: boolean;
+    enableAccentColor?: boolean;
+  } | null) => void;
 }) {
   const { config, setConfig } = useContext(ConfigContext);
 
   const [localConfig, setLocalConfig] = useState(config);
   const [hasChanges, setHasChanges] = useState(false);
   const [helpRequests, setHelpRequests] = useState<any[]>([]);
+
+  // Location Picker states
+  const [locationSearchQuery, setLocationSearchQuery] = useState("");
+  const [locationSearchResults, setLocationSearchResults] = useState<
+    Array<{ placeId: string; displayName: string; lat: number; lng: number; type?: string }>
+  >([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+  const [locationMapInput, setLocationMapInput] = useState("");
+  const [isResolvingMapInput, setIsResolvingMapInput] = useState(false);
+  const [isFetchingCurrentLocation, setIsFetchingCurrentLocation] = useState(false);
+  const [showMapPreview, setShowMapPreview] = useState(true);
+
+  // Hex text input drafts for smooth typing before valid 6-char hex
+  const [primaryHexInput, setPrimaryHexInput] = useState(() =>
+    normalizeHexColor(config?.themeColor, "#e11d48").toUpperCase()
+  );
+  const [secondaryHexInput, setSecondaryHexInput] = useState(() =>
+    normalizeHexColor(config?.secondaryColor, "#3b82f6").toUpperCase()
+  );
+  const [accentHexInput, setAccentHexInput] = useState(() =>
+    normalizeHexColor(config?.accentColor, "#10b981").toUpperCase()
+  );
 
   // Booth management states inside AdminDashboardView
   const [bFormId, setBFormId] = useState("");
@@ -946,9 +996,224 @@ export default function AdminDashboardView({
     }
   };
 
+  useEffect(() => {
+    setPrimaryHexInput(normalizeHexColor(localConfig?.themeColor, "#e11d48").toUpperCase());
+  }, [localConfig?.themeColor]);
+
+  useEffect(() => {
+    setSecondaryHexInput(normalizeHexColor(localConfig?.secondaryColor, "#3b82f6").toUpperCase());
+  }, [localConfig?.secondaryColor]);
+
+  useEffect(() => {
+    setAccentHexInput(normalizeHexColor(localConfig?.accentColor, "#10b981").toUpperCase());
+  }, [localConfig?.accentColor]);
+
+  useEffect(() => {
+    if (!onPreviewTheme) return;
+    if (hasChanges) {
+      onPreviewTheme({
+        themeColor: normalizeHexColor(localConfig?.themeColor, "#e11d48"),
+        secondaryColor: normalizeHexColor(localConfig?.secondaryColor, "#3b82f6"),
+        accentColor: normalizeHexColor(localConfig?.accentColor, "#10b981"),
+        enableSecondaryColor: !!localConfig?.enableSecondaryColor,
+        enableAccentColor: !!localConfig?.enableAccentColor,
+      });
+    } else {
+      onPreviewTheme(null);
+    }
+  }, [
+    hasChanges,
+    localConfig?.themeColor,
+    localConfig?.secondaryColor,
+    localConfig?.accentColor,
+    localConfig?.enableSecondaryColor,
+    localConfig?.enableAccentColor,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      onPreviewTheme?.(null);
+    };
+  }, []);
+
   const handleUpdateLocalConfig = (updates: any) => {
-    setLocalConfig((prev) => ({ ...prev, ...updates }));
+    setLocalConfig((prev: any) => ({ ...prev, ...updates }));
     setHasChanges(true);
+  };
+
+  const handleFetchCurrentLocation = async () => {
+    setIsFetchingCurrentLocation(true);
+    try {
+      const result = await getResilientLocation({ allowIpFallback: true });
+      if (result.ok && typeof result.lat === "number" && typeof result.lng === "number") {
+        handleUpdateLocalConfig({
+          eventLat: result.lat.toString(),
+          eventLng: result.lng.toString(),
+          ...(result.label && !localConfig.eventLocationName
+            ? { eventLocationName: result.label }
+            : {}),
+        });
+        setShowMapPreview(true);
+        if (result.source === "ip") {
+          showToast({
+            type: "warning",
+            title: "ดึงพิกัดโดยประมาณจากเครือข่ายแล้ว",
+            message:
+              "อุปกรณ์นี้ไม่ได้ส่งสัญญาณ GPS ระบบจึงระบุตำแหน่งเบื้องต้นให้แทน กรุณาค้นหาชื่อสถานที่หรือวางลิงก์ Google Maps เพื่อความแม่นยำ",
+          });
+        } else {
+          showToast({
+            type: "success",
+            title: "ดึงตำแหน่งปัจจุบันสำเร็จ",
+            message: `บันทึกพิกัด ${result.lat.toFixed(5)}, ${result.lng.toFixed(5)} เรียบร้อยแล้ว (อย่าลืมกดบันทึกการตั้งค่า)`,
+          });
+        }
+      } else {
+        showToast({
+          type: result.reason === "permission_denied" ? "warning" : "info",
+          title:
+            result.reason === "permission_denied"
+              ? "เบราว์เซอร์ไม่ได้อนุญาตสิทธิ์ตำแหน่ง"
+              : "อุปกรณ์นี้ไม่รองรับ GPS อัตโนมัติ",
+          message:
+            result.message ||
+            "กรุณาใช้ช่องค้นหาชื่อสถานที่ หรือวางลิงก์ Google Maps ด้านล่างแทน (แม่นยำกว่าสำหรับการตั้งค่าสถานที่ล่วงหน้า)",
+        });
+      }
+    } finally {
+      setIsFetchingCurrentLocation(false);
+    }
+  };
+
+  const handleSearchVenueLocation = async () => {
+    const q = locationSearchQuery.trim();
+    if (q.length < 2) {
+      showToast({
+        type: "warning",
+        title: "กรุณาพิมพ์ชื่อสถานที่อย่างน้อย 2 ตัวอักษร",
+        message: "เช่น ไบเทค บางนา, เซ็นทรัลเวิลด์, อิมแพ็ค เมืองทองธานี",
+      });
+      return;
+    }
+    setIsSearchingLocation(true);
+    try {
+      const res = await fetch(`/api/location/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "ไม่สามารถค้นหาสถานที่ได้");
+      }
+      const results = Array.isArray(data?.results) ? data.results : [];
+      setLocationSearchResults(results);
+      if (results.length === 0) {
+        showToast({
+          type: "info",
+          title: "ไม่พบสถานที่ที่ตรงกับคำค้นหา",
+          message: "ลองค้นหาด้วยชื่อสั้นลง หรือวางลิงก์ Google Maps โดยตรงแทน",
+        });
+      }
+    } catch (err: any) {
+      showToast({
+        type: "error",
+        title: "ค้นหาสถานที่ล้มเหลว",
+        message: err?.message || "กรุณาลองใหม่อีกครั้ง หรือวางลิงก์ Google Maps แทน",
+      });
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  };
+
+  const handleParseMapLinkOrCoords = async (rawOverride?: string) => {
+    const raw = (rawOverride ?? locationMapInput).trim();
+    if (!raw) {
+      showToast({
+        type: "warning",
+        title: "กรุณาวางลิงก์ Google Maps หรือพิกัด",
+        message: "ตัวอย่าง: 13.7563, 100.5018 หรือลิงก์จาก Google Maps",
+      });
+      return;
+    }
+
+    const direct = parseCoordinatesFromText(raw);
+    if (direct) {
+      handleUpdateLocalConfig({
+        eventLat: direct.lat.toFixed(6),
+        eventLng: direct.lng.toFixed(6),
+      });
+      setLocationMapInput("");
+      setShowMapPreview(true);
+      showToast({
+        type: "success",
+        title: "ดึงพิกัดสำเร็จ",
+        message: `กำหนดพิกัดเป็น ${direct.lat.toFixed(6)}, ${direct.lng.toFixed(6)} เรียบร้อยแล้ว`,
+      });
+      return;
+    }
+
+    if (/^https?:\/\//i.test(raw)) {
+      setIsResolvingMapInput(true);
+      try {
+        const res = await fetch("/api/location/resolve-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: raw }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || "ไม่สามารถเปิดลิงก์ได้");
+        }
+        const fromResolvedUrl = parseCoordinatesFromText(data?.resolvedUrl || "");
+        const fromHtml = fromResolvedUrl || parseCoordinatesFromText(data?.htmlSnippet || "");
+        if (fromHtml) {
+          handleUpdateLocalConfig({
+            eventLat: fromHtml.lat.toFixed(6),
+            eventLng: fromHtml.lng.toFixed(6),
+          });
+          setLocationMapInput("");
+          setShowMapPreview(true);
+          showToast({
+            type: "success",
+            title: "ดึงพิกัดจากลิงก์ Google Maps สำเร็จ",
+            message: `กำหนดพิกัดเป็น ${fromHtml.lat.toFixed(6)}, ${fromHtml.lng.toFixed(6)} เรียบร้อยแล้ว`,
+          });
+          return;
+        }
+        showToast({
+          type: "warning",
+          title: "ไม่พบค่าพิกัดในลิงก์นี้",
+          message: "กรุณาเปิดลิงก์ใน Google Maps แล้วคัดลอก URL จากแถบที่อยู่ (ที่มี @ละติจูด,ลองจิจูด) หรือค้นหาชื่อสถานที่แทน",
+        });
+      } catch (err: any) {
+        showToast({
+          type: "error",
+          title: "ไม่สามารถแปลลิงก์ Google Maps ได้",
+          message: err?.message || "กรุณาคัดลอกพิกัดตัวเลขมาวางโดยตรง",
+        });
+      } finally {
+        setIsResolvingMapInput(false);
+      }
+      return;
+    }
+
+    showToast({
+      type: "warning",
+      title: "รูปแบบพิกัดหรือลิงก์ไม่ถูกต้อง",
+      message: "กรุณาวางลิงก์ Google Maps หรือพิมพ์พิกัด เช่น 13.7563, 100.5018",
+    });
+  };
+
+  const handleResetThemeColors = () => {
+    handleUpdateLocalConfig({
+      themeColor: "#e11d48",
+      secondaryColor: "#3b82f6",
+      accentColor: "#10b981",
+      enableSecondaryColor: false,
+      enableAccentColor: false,
+    });
+    showToast({
+      type: "info",
+      title: "คืนค่าธีมสีเริ่มต้นในแบบร่างแล้ว",
+      message: "กดปุ่มบันทึกการตั้งค่าเพื่อใช้งานสีเริ่มต้นกับทั้งระบบ",
+    });
   };
 
   const handleSaveConfig = async () => {
@@ -3068,205 +3333,688 @@ export default function AdminDashboardView({
                   </div>
                 </div>
 
-                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                  <label className="block text-sm font-bold text-slate-700 mb-2">
-                    ระบุพิกัดสถานที่จัดงาน (Location)
-                  </label>
-                  <p className="text-xs text-slate-500 mb-3">
-                    ใช้สำหรับการตรวจสอบการเข้าทำแบบประเมินผู้ใช้
-                    (เช็คว่าอยู่ในรัศมี 2 กม. ของงานหรือไม่)
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Event Venue Location Picker */}
+                <div className="bg-slate-50/80 p-4 sm:p-5 rounded-2xl border border-slate-200/80 space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        ละติจูด (Latitude)
+                      <label className="text-sm font-extrabold text-slate-800 flex items-center gap-1.5">
+                        <MapPin className="w-4 h-4 text-primary shrink-0" />
+                        ระบุพิกัดสถานที่จัดงาน (Location)
                       </label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={localConfig.eventLat || ""}
-                        onChange={(e) =>
-                          handleUpdateLocalConfig({ eventLat: e.target.value })
-                        }
-                        className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-primary text-sm"
-                        placeholder="Ex. 13.7563"
-                      />
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        ใช้ตรวจสอบว่าผู้เข้าร่วมอยู่ในรัศมีสถานที่จัดงานก่อนทำแบบประเมิน
+                      </p>
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        ลองจิจูด (Longitude)
-                      </label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={localConfig.eventLng || ""}
-                        onChange={(e) =>
-                          handleUpdateLocalConfig({ eventLng: e.target.value })
-                        }
-                        className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-primary text-sm"
-                        placeholder="Ex. 100.5018"
-                      />
+                    {(() => {
+                      const latNum = parseFloat(localConfig.eventLat || "");
+                      const lngNum = parseFloat(localConfig.eventLng || "");
+                      const hasValidLoc = isValidCoordinates(latNum, lngNum);
+                      const radiusKm = Number(localConfig.eventRadiusKm) > 0 ? Number(localConfig.eventRadiusKm) : 2;
+                      return hasValidLoc ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-bold whitespace-nowrap">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                          <span>เปิดเช็คระยะ {radiusKm} กม.</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-slate-500 text-[11px] font-bold whitespace-nowrap">
+                          ไม่จำกัดระยะทาง
+                        </span>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Method 1: Search Venue Name */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-slate-700">
+                      วิธีที่ 1: ค้นหาจากชื่อสถานที่จัดงาน
+                    </label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={locationSearchQuery}
+                          onChange={(e) => setLocationSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleSearchVenueLocation();
+                            }
+                          }}
+                          placeholder="พิมพ์ชื่อสถานที่ เช่น ไบเทค บางนา, เซ็นทรัลเวิลด์, อิมแพ็ค..."
+                          className="w-full pl-9 pr-3 py-2 bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-xs sm:text-sm"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isSearchingLocation}
+                        onClick={handleSearchVenueLocation}
+                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        {isSearchingLocation ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Search className="w-3.5 h-3.5" />
+                        )}
+                        <span>ค้นหา</span>
+                      </button>
+                    </div>
+
+                    {locationSearchResults.length > 0 && (
+                      <div className="bg-white border border-slate-200 rounded-xl shadow-md divide-y divide-slate-100 max-h-52 overflow-y-auto">
+                        {locationSearchResults.map((place) => (
+                          <button
+                            key={place.placeId + place.lat}
+                            type="button"
+                            onClick={() => {
+                              const shortName = place.displayName.split(",")[0]?.trim() || place.displayName;
+                              handleUpdateLocalConfig({
+                                eventLat: place.lat.toFixed(6),
+                                eventLng: place.lng.toFixed(6),
+                                eventLocationName: shortName,
+                              });
+                              setLocationSearchResults([]);
+                              setShowMapPreview(true);
+                              showToast({
+                                type: "success",
+                                title: "เลือกสถานที่จัดงานแล้ว",
+                                message: `${shortName} (${place.lat.toFixed(5)}, ${place.lng.toFixed(5)})`,
+                              });
+                            }}
+                            className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 transition flex items-start gap-2.5 cursor-pointer"
+                          >
+                            <MapPin className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-bold text-slate-800 line-clamp-2 leading-snug">
+                                {place.displayName}
+                              </p>
+                              <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+                                {place.lat.toFixed(5)}, {place.lng.toFixed(5)}
+                              </p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Method 2: Paste Google Maps Link or Coords */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">
+                      วิธีที่ 2: วางลิงก์ Google Maps หรือพิกัด (เช่น 13.7563, 100.5018)
+                    </label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Link2 className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={locationMapInput}
+                          onChange={(e) => setLocationMapInput(e.target.value)}
+                          onPaste={(e) => {
+                            const pasted = e.clipboardData?.getData("text");
+                            if (pasted && parseCoordinatesFromText(pasted)) {
+                              e.preventDefault();
+                              handleParseMapLinkOrCoords(pasted);
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleParseMapLinkOrCoords();
+                            }
+                          }}
+                          placeholder="https://maps.app.goo.gl/... หรือ https://www.google.com/maps/..."
+                          className="w-full pl-9 pr-3 py-2 bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-xs sm:text-sm"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isResolvingMapInput}
+                        onClick={() => handleParseMapLinkOrCoords()}
+                        className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
+                      >
+                        {isResolvingMapInput ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Compass className="w-3.5 h-3.5 text-primary" />
+                        )}
+                        <span>ดึงพิกัด</span>
+                      </button>
                     </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      if (navigator.geolocation) {
-                        navigator.geolocation.getCurrentPosition(
-                          (position) => {
-                            handleUpdateLocalConfig({
-                              eventLat: position.coords.latitude.toString(),
-                              eventLng: position.coords.longitude.toString(),
-                            });
-                          },
-                          (err) => {
-                            if (err.code === err.PERMISSION_DENIED) {
-                              showToast({
-                                type: 'warning',
-                                title: 'ระบบถูกปฏิเสธการเข้าถึงตำแหน่ง',
-                                message: 'กรุณากดยินยอม (Allow Location) บนป๊อปอัปแจ้งเตือน หรืออนุญาตในการตั้งค่าเบราว์เซอร์ (Site Settings -> Location)',
-                              });
-                            } else {
-                              showToast({
-                                type: 'error',
-                                title: 'ไม่สามารถดึงตำแหน่งได้',
-                                message: err.message,
-                              });
-                            }
-                          },
-                        );
-                      } else {
-                        showToast({
-                          type: 'warning',
-                          title: 'เบราว์เซอร์ของคุณไม่รองรับการดึงตำแหน่ง',
-                        });
-                      }
-                    }}
-                    className="mt-3 text-xs bg-white border border-slate-200 px-3 py-1.5 rounded-lg font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-1"
-                  >
-                    <MapIcon className="w-3 h-3" /> ดึงตำแหน่งปัจจุบันของฉัน
-                  </button>
-                </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    สีธีมหลัก (Primary Brand Color)
-                  </label>
-                  <div className="flex items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <input
-                      type="color"
-                      value={localConfig.themeColor}
-                      onChange={(e) =>
-                        handleUpdateLocalConfig({ themeColor: e.target.value })
-                      }
-                      className="w-14 h-14 rounded-lg cursor-pointer flex-shrink-0 bg-transparent border-0 p-0"
-                    />
-                    <div className="flex-1">
-                      <p className="text-xs text-slate-500 mb-2">
-                        เลือกสีความละเอียดสูงเพื่อใช้กับปุ่ม เมนู และสถานะต่างๆ
-                        ทั้งระบบ (รองรับทุกเฉดสี)
-                      </p>
-                      <div className="flex gap-2 items-center">
-                        <span className="text-[10px] font-medium text-slate-400">
-                          Preview:
-                        </span>
-                        <div
-                          className="w-6 h-6 rounded-md bg-primary shadow-sm"
-                          title="Primary Color"
-                        ></div>
-                        <div
-                          className="w-6 h-6 rounded-md bg-primary-hover shadow-sm"
-                          title="Hover Color (Darker)"
-                        ></div>
-                        <div
-                          className="w-6 h-6 rounded-md bg-primary-light border shadow-sm"
-                          title="Light Background"
-                        ></div>
+                  {/* Method 3 + Manual Coordinates + Radius */}
+                  <div className="pt-2 border-t border-slate-200/70 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          ชื่อสถานที่จัดงาน (แสดงให้แอดมินจำง่าย)
+                        </label>
+                        <input
+                          type="text"
+                          value={localConfig.eventLocationName || ""}
+                          onChange={(e) =>
+                            handleUpdateLocalConfig({ eventLocationName: e.target.value })
+                          }
+                          placeholder="เช่น ศูนย์การประชุมแห่งชาติสิริกิติ์"
+                          className="w-full px-3 py-2 bg-white rounded-xl border border-slate-200 focus:outline-none focus:border-primary text-xs sm:text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          รัศมีที่อนุญาต
+                        </label>
+                        <select
+                          value={Number(localConfig.eventRadiusKm) > 0 ? Number(localConfig.eventRadiusKm) : 2}
+                          onChange={(e) =>
+                            handleUpdateLocalConfig({ eventRadiusKm: Number(e.target.value) })
+                          }
+                          className="w-full px-3 py-2 bg-white rounded-xl border border-slate-200 focus:outline-none focus:border-primary text-xs sm:text-sm font-bold text-slate-700"
+                        >
+                          <option value={0.5}>0.5 กม. (ในอาคาร)</option>
+                          <option value={1}>1 กม.</option>
+                          <option value={2}>2 กม. (แนะนำ)</option>
+                          <option value={5}>5 กม.</option>
+                          <option value={10}>10 กม.</option>
+                        </select>
                       </div>
                     </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          ละติจูด (Latitude)
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={localConfig.eventLat || ""}
+                          onChange={(e) =>
+                            handleUpdateLocalConfig({ eventLat: e.target.value })
+                          }
+                          className="w-full px-3 py-2 bg-white rounded-xl border border-slate-200 focus:outline-none focus:border-primary text-sm tabular-nums"
+                          placeholder="Ex. 13.7563"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          ลองจิจูด (Longitude)
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={localConfig.eventLng || ""}
+                          onChange={(e) =>
+                            handleUpdateLocalConfig({ eventLng: e.target.value })
+                          }
+                          className="w-full px-3 py-2 bg-white rounded-xl border border-slate-200 focus:outline-none focus:border-primary text-sm tabular-nums"
+                          placeholder="Ex. 100.5018"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        disabled={isFetchingCurrentLocation}
+                        onClick={handleFetchCurrentLocation}
+                        className="text-xs bg-white border border-slate-200 hover:border-slate-300 px-3 py-2 rounded-xl font-bold text-slate-700 hover:bg-slate-100 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                      >
+                        {isFetchingCurrentLocation ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                        ) : (
+                          <Crosshair className="w-3.5 h-3.5 text-primary" />
+                        )}
+                        <span>
+                          {isFetchingCurrentLocation ? "กำลังระบุตำแหน่ง..." : "วิธีที่ 3: ดึงตำแหน่งปัจจุบันของฉัน"}
+                        </span>
+                      </button>
+
+                      {(() => {
+                        const latNum = parseFloat(localConfig.eventLat || "");
+                        const lngNum = parseFloat(localConfig.eventLng || "");
+                        if (!isValidCoordinates(latNum, lngNum)) return null;
+                        return (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => setShowMapPreview((v) => !v)}
+                              className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>{showMapPreview ? "ซ่อนแผนที่" : "ดูแผนที่"}</span>
+                            </button>
+                            <a
+                              href={`https://www.google.com/maps?q=${latNum},${lngNum}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-primary font-bold flex items-center gap-1 transition whitespace-nowrap"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              <span>เปิดใน Google Maps</span>
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleUpdateLocalConfig({
+                                  eventLat: "",
+                                  eventLng: "",
+                                  eventLocationName: "",
+                                })
+                              }
+                              className="text-xs px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold transition cursor-pointer whitespace-nowrap"
+                            >
+                              ล้างพิกัด
+                            </button>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {(() => {
+                      const latNum = parseFloat(localConfig.eventLat || "");
+                      const lngNum = parseFloat(localConfig.eventLng || "");
+                      if (!showMapPreview || !isValidCoordinates(latNum, lngNum)) return null;
+                      return (
+                        <div className="rounded-xl overflow-hidden border border-slate-200 bg-white shadow-inner">
+                          <iframe
+                            title="Event Location Map Preview"
+                            src={buildOpenStreetMapEmbedUrl(latNum, lngNum)}
+                            className="w-full h-44 border-0"
+                            loading="lazy"
+                          />
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
-                {/* Secondary Color */}
-                <div className="pt-2 border-t border-slate-100">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-sm font-medium text-slate-700">
-                      สีธีมรอง (Secondary Color)
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-500">
-                        เปิดใช้งาน:
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={localConfig.enableSecondaryColor}
-                        onChange={(e) =>
-                          handleUpdateLocalConfig({
-                            enableSecondaryColor: e.target.checked,
-                          })
-                        }
-                        className="rounded text-primary h-4 w-4"
-                      />
-                    </div>
-                  </div>
-                  {localConfig.enableSecondaryColor && (
-                    <div className="flex items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100 mt-2">
-                      <input
-                        type="color"
-                        value={localConfig.secondaryColor}
-                        onChange={(e) =>
-                          handleUpdateLocalConfig({
-                            secondaryColor: e.target.value,
-                          })
-                        }
-                        className="w-10 h-10 rounded-lg cursor-pointer flex-shrink-0 bg-transparent border-0 p-0"
-                      />
-                      <p className="text-xs text-slate-500">
-                        ใช้เป็นสีในบางส่วนประกอบ เพื่อเพิ่มมิติให้ตัวงาน
-                      </p>
-                    </div>
-                  )}
-                </div>
+                {/* Professional Brand Theme System (Live CSS Preview Scope) */}
+                {(() => {
+                  const previewPrimary = normalizeHexColor(localConfig.themeColor, "#e11d48");
+                  const previewSecondary = localConfig.enableSecondaryColor
+                    ? normalizeHexColor(localConfig.secondaryColor, "#3b82f6")
+                    : previewPrimary;
+                  const previewAccent = localConfig.enableAccentColor
+                    ? normalizeHexColor(localConfig.accentColor, "#10b981")
+                    : previewPrimary;
+                  const primaryContrast = getContrastFeedback(previewPrimary);
 
-                {/* Accent Color */}
-                <div className="pt-2 border-t border-slate-100">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-sm font-medium text-slate-700">
-                      สีพิเศษ (Accent Color)
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-500">
-                        เปิดใช้งาน:
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={localConfig.enableAccentColor}
-                        onChange={(e) =>
-                          handleUpdateLocalConfig({
-                            enableAccentColor: e.target.checked,
-                          })
-                        }
-                        className="rounded text-primary h-4 w-4"
-                      />
+                  return (
+                    <div
+                      style={
+                        {
+                          "--theme-primary": previewPrimary,
+                          "--theme-secondary": previewSecondary,
+                          "--theme-accent": previewAccent,
+                        } as React.CSSProperties
+                      }
+                      className="bg-slate-50/80 p-4 sm:p-5 rounded-2xl border border-slate-200/80 space-y-5"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <label className="text-sm font-extrabold text-slate-800 flex items-center gap-1.5">
+                            <Palette className="w-4 h-4 text-primary shrink-0" />
+                            ระบบธีมสีแบรนด์ (Brand Theme System)
+                          </label>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            เลือกชุดธีมสำเร็จรูปหรือกำหนดรหัสสี Hex เอง พร้อมแสดงผลจริงทันทีทั่วทั้งระบบ
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleResetThemeColors}
+                          className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>รีเซ็ตธีมเริ่มต้น</span>
+                        </button>
+                      </div>
+
+                      {/* Curated Theme Presets */}
+                      <div>
+                        <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+                          ชุดธีมสีแนะนำ (เลือกใช้ได้ใน 1 คลิก)
+                        </span>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {THEME_PRESETS.map((preset) => {
+                            const isSelected =
+                              previewPrimary.toLowerCase() === preset.primary.toLowerCase() &&
+                              (!localConfig.enableSecondaryColor ||
+                                normalizeHexColor(localConfig.secondaryColor).toLowerCase() ===
+                                  preset.secondary.toLowerCase()) &&
+                              (!localConfig.enableAccentColor ||
+                                normalizeHexColor(localConfig.accentColor).toLowerCase() ===
+                                  preset.accent.toLowerCase());
+                            return (
+                              <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateLocalConfig({
+                                    themeColor: preset.primary,
+                                    secondaryColor: preset.secondary,
+                                    accentColor: preset.accent,
+                                    enableSecondaryColor: true,
+                                    enableAccentColor: true,
+                                  })
+                                }
+                                className={`text-left p-2.5 rounded-xl border transition-all cursor-pointer ${
+                                  isSelected
+                                    ? "bg-white border-primary ring-2 ring-primary/15 shadow-sm"
+                                    : "bg-white border-slate-200 hover:border-slate-300"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1.5 mb-1">
+                                  <div className="flex items-center gap-1">
+                                    <span
+                                      className="w-3.5 h-3.5 rounded-full border border-black/10"
+                                      style={{ backgroundColor: preset.primary }}
+                                    />
+                                    <span
+                                      className="w-3.5 h-3.5 rounded-full border border-black/10"
+                                      style={{ backgroundColor: preset.secondary }}
+                                    />
+                                    <span
+                                      className="w-3.5 h-3.5 rounded-full border border-black/10"
+                                      style={{ backgroundColor: preset.accent }}
+                                    />
+                                  </div>
+                                  {isSelected && <Check className="w-3.5 h-3.5 text-primary shrink-0" />}
+                                </div>
+                                <p className="text-xs font-extrabold text-slate-800 truncate">
+                                  {preset.name}
+                                </p>
+                                <p className="text-[10px] text-slate-500 truncate">
+                                  {preset.subtitle}
+                                </p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Primary Brand Color */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <label className="text-xs font-extrabold text-slate-800">
+                            สีธีมหลัก (Primary Brand Color)
+                          </label>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-bold text-slate-400">Preview:</span>
+                            <div
+                              className="w-6 h-6 rounded-md bg-primary shadow-sm border border-black/10"
+                              title="สีหลัก (Primary)"
+                            />
+                            <div
+                              className="w-6 h-6 rounded-md bg-primary-hover shadow-sm border border-black/10"
+                              title="สีเมื่อชี้เมาส์ (Hover)"
+                            />
+                            <div
+                              className="w-6 h-6 rounded-md bg-primary-light border border-slate-200 shadow-sm"
+                              title="สีพื้นหลังอ่อน (Light)"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="color"
+                            value={previewPrimary}
+                            onChange={(e) =>
+                              handleUpdateLocalConfig({ themeColor: e.target.value })
+                            }
+                            className="w-12 h-10 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={primaryHexInput}
+                                maxLength={7}
+                                onChange={(e) => {
+                                  const nextVal = e.target.value.toUpperCase();
+                                  setPrimaryHexInput(nextVal);
+                                  if (isValidHexColor(nextVal)) {
+                                    handleUpdateLocalConfig({ themeColor: nextVal.toLowerCase() });
+                                  }
+                                }}
+                                onBlur={() => {
+                                  setPrimaryHexInput(previewPrimary.toUpperCase());
+                                }}
+                                className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none focus:border-primary"
+                                placeholder="#E11D48"
+                              />
+                              <span className="text-[11px] text-slate-500 truncate">
+                                ใช้กับปุ่มหลัก แถบเมนู active และโลโก้
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1.5 rounded-lg ${
+                            primaryContrast.level === "low"
+                              ? "bg-amber-50 text-amber-700 border border-amber-200"
+                              : "bg-slate-50 text-slate-600 border border-slate-100"
+                          }`}
+                        >
+                          {primaryContrast.level === "low" ? (
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          ) : (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          )}
+                          <span>{primaryContrast.label}</span>
+                        </div>
+                      </div>
+
+                      {/* Secondary Color */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <label className="text-xs font-extrabold text-slate-800 block">
+                              สีธีมรอง (Secondary Color)
+                            </label>
+                            <span className="text-[11px] text-slate-500">
+                              ใช้กับขั้นตอนการจอง การอัปโหลด และส่วนประกอบเสริม
+                            </span>
+                          </div>
+                          <label className="inline-flex items-center gap-2 cursor-pointer shrink-0">
+                            <span className="text-xs font-bold text-slate-600">เปิดใช้งาน</span>
+                            <input
+                              type="checkbox"
+                              checked={!!localConfig.enableSecondaryColor}
+                              onChange={(e) =>
+                                handleUpdateLocalConfig({
+                                  enableSecondaryColor: e.target.checked,
+                                })
+                              }
+                              className="rounded text-primary h-4 w-4 accent-primary cursor-pointer"
+                            />
+                          </label>
+                        </div>
+                        {localConfig.enableSecondaryColor && (
+                          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
+                            <div className="flex items-center gap-2.5">
+                              <input
+                                type="color"
+                                value={normalizeHexColor(localConfig.secondaryColor, "#3b82f6")}
+                                onChange={(e) =>
+                                  handleUpdateLocalConfig({ secondaryColor: e.target.value })
+                                }
+                                className="w-10 h-9 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
+                              />
+                              <input
+                                type="text"
+                                value={secondaryHexInput}
+                                maxLength={7}
+                                onChange={(e) => {
+                                  const nextVal = e.target.value.toUpperCase();
+                                  setSecondaryHexInput(nextVal);
+                                  if (isValidHexColor(nextVal)) {
+                                    handleUpdateLocalConfig({
+                                      secondaryColor: nextVal.toLowerCase(),
+                                    });
+                                  }
+                                }}
+                                onBlur={() =>
+                                  setSecondaryHexInput(
+                                    normalizeHexColor(
+                                      localConfig.secondaryColor,
+                                      "#3b82f6"
+                                    ).toUpperCase()
+                                  )
+                                }
+                                className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none focus:border-primary"
+                                placeholder="#3B82F6"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <div className="w-5 h-5 rounded bg-secondary border border-black/10" />
+                              <div className="w-5 h-5 rounded bg-secondary-hover border border-black/10" />
+                              <div className="w-5 h-5 rounded bg-secondary-light border border-slate-200" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Accent Color */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <label className="text-xs font-extrabold text-slate-800 block">
+                              สีพิเศษ (Accent Color)
+                            </label>
+                            <span className="text-[11px] text-slate-500">
+                              ใช้เน้นปุ่มยืนยันการชำระเงิน ยอดรวม และจุดดึงดูดสายตา
+                            </span>
+                          </div>
+                          <label className="inline-flex items-center gap-2 cursor-pointer shrink-0">
+                            <span className="text-xs font-bold text-slate-600">เปิดใช้งาน</span>
+                            <input
+                              type="checkbox"
+                              checked={!!localConfig.enableAccentColor}
+                              onChange={(e) =>
+                                handleUpdateLocalConfig({
+                                  enableAccentColor: e.target.checked,
+                                })
+                              }
+                              className="rounded text-primary h-4 w-4 accent-primary cursor-pointer"
+                            />
+                          </label>
+                        </div>
+                        {localConfig.enableAccentColor && (
+                          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
+                            <div className="flex items-center gap-2.5">
+                              <input
+                                type="color"
+                                value={normalizeHexColor(localConfig.accentColor, "#10b981")}
+                                onChange={(e) =>
+                                  handleUpdateLocalConfig({ accentColor: e.target.value })
+                                }
+                                className="w-10 h-9 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
+                              />
+                              <input
+                                type="text"
+                                value={accentHexInput}
+                                maxLength={7}
+                                onChange={(e) => {
+                                  const nextVal = e.target.value.toUpperCase();
+                                  setAccentHexInput(nextVal);
+                                  if (isValidHexColor(nextVal)) {
+                                    handleUpdateLocalConfig({
+                                      accentColor: nextVal.toLowerCase(),
+                                    });
+                                  }
+                                }}
+                                onBlur={() =>
+                                  setAccentHexInput(
+                                    normalizeHexColor(
+                                      localConfig.accentColor,
+                                      "#10b981"
+                                    ).toUpperCase()
+                                  )
+                                }
+                                className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none focus:border-primary"
+                                placeholder="#10B981"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <div className="w-5 h-5 rounded bg-accent border border-black/10" />
+                              <div className="w-5 h-5 rounded bg-accent-hover border border-black/10" />
+                              <div className="w-5 h-5 rounded bg-accent-light border border-slate-200" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Live Interactive Component Preview */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                            <Sparkles className="w-3.5 h-3.5 text-primary" />
+                            ตัวอย่างการแสดงผลหน้างานจริง
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {hasChanges ? "กำลังพรีวิวค่าใหม่" : "ตรงกับค่าที่บันทึก"}
+                          </span>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-50">
+                          <div className="bg-white px-3 py-2 border-b border-slate-200 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="w-2.5 h-2.5 rounded-sm bg-primary shrink-0" />
+                              <span className="text-xs font-extrabold text-slate-800 truncate">
+                                {localConfig.eventName || "EventTicketingPro"}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-bold text-primary border-b-2 border-primary pb-0.5 shrink-0">
+                              จองที่นั่ง
+                            </span>
+                          </div>
+                          <div className="p-3 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-sm">
+                                ปุ่มหลัก (Primary)
+                              </span>
+                              <span className="px-2.5 py-1.5 rounded-lg bg-secondary-light text-secondary border border-secondary/30 text-[11px] font-bold">
+                                ป้ายข้อมูลรอง (Secondary)
+                              </span>
+                            </div>
+                            <span className="px-3 py-1.5 rounded-lg bg-accent text-white text-[11px] font-bold shadow-sm tabular-nums">
+                              ชำระเงิน ฿3,500 (Accent)
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Quick Save / Discard Bar inside Branding Card */}
+                      {hasChanges && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
+                          <span className="text-xs font-bold text-amber-700">
+                            มีการปรับปรุงข้อมูลงานหรือธีมสีที่ยังไม่บันทึก
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleResetConfig}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-xs font-bold transition cursor-pointer whitespace-nowrap"
+                            >
+                              ยกเลิก
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSaveConfig}
+                              className="px-3.5 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-bold shadow-sm flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              <span>บันทึกธีม &amp; ข้อมูลงาน</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  {localConfig.enableAccentColor && (
-                    <div className="flex items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100 mt-2">
-                      <input
-                        type="color"
-                        value={localConfig.accentColor}
-                        onChange={(e) =>
-                          handleUpdateLocalConfig({
-                            accentColor: e.target.value,
-                          })
-                        }
-                        className="w-10 h-10 rounded-lg cursor-pointer flex-shrink-0 bg-transparent border-0 p-0"
-                      />
-                      <p className="text-xs text-slate-500">
-                        ใช้เน้นย้ำจุดที่สำคัญ หรือจัดให้ดึงดูดสายตาภาพรวม
-                      </p>
-                    </div>
-                  )}
-                </div>
+                  );
+                })()}
               </div>
             </div>
 
