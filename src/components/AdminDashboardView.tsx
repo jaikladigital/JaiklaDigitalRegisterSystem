@@ -85,8 +85,11 @@ import {
 import {
   THEME_PRESETS,
   getContrastFeedback,
+  getHoverShadeHex,
+  getLightTintHex,
   isValidHexColor,
   normalizeHexColor,
+  suggestAccessibleShade,
 } from "../utils/themeHelpers";
 import {
   DEFAULT_LINE_OA_ID,
@@ -3832,16 +3835,157 @@ export default function AdminDashboardView({
                   </div>
                 </div>
 
-                {/* Professional Brand Theme System (Live CSS Preview Scope) */}
+                {/* Professional Brand Theme System & Color Comparison (Live CSS Preview Scope) */}
                 {(() => {
                   const previewPrimary = normalizeHexColor(localConfig.themeColor, "#e11d48");
+                  const previewSecondaryRaw = normalizeHexColor(localConfig.secondaryColor, "#3b82f6");
+                  const previewAccentRaw = normalizeHexColor(localConfig.accentColor, "#10b981");
                   const previewSecondary = localConfig.enableSecondaryColor
-                    ? normalizeHexColor(localConfig.secondaryColor, "#3b82f6")
+                    ? previewSecondaryRaw
                     : previewPrimary;
                   const previewAccent = localConfig.enableAccentColor
-                    ? normalizeHexColor(localConfig.accentColor, "#10b981")
+                    ? previewAccentRaw
                     : previewPrimary;
+
+                  const savedPrimary = normalizeHexColor(config?.themeColor, "#e11d48");
+                  const savedSecondary = config?.enableSecondaryColor
+                    ? normalizeHexColor(config?.secondaryColor, "#3b82f6")
+                    : savedPrimary;
+                  const savedAccent = config?.enableAccentColor
+                    ? normalizeHexColor(config?.accentColor, "#10b981")
+                    : savedPrimary;
+
+                  const hasThemeChanges =
+                    previewPrimary.toLowerCase() !== savedPrimary.toLowerCase() ||
+                    previewSecondary.toLowerCase() !== savedSecondary.toLowerCase() ||
+                    previewAccent.toLowerCase() !== savedAccent.toLowerCase() ||
+                    !!localConfig.enableSecondaryColor !== !!config?.enableSecondaryColor ||
+                    !!localConfig.enableAccentColor !== !!config?.enableAccentColor;
+
                   const primaryContrast = getContrastFeedback(previewPrimary);
+                  const secondaryContrast = getContrastFeedback(previewSecondary);
+                  const accentContrast = getContrastFeedback(previewAccent);
+
+                  const handleRevertThemeToSaved = () => {
+                    handleUpdateLocalConfig({
+                      themeColor: config?.themeColor || "#e11d48",
+                      secondaryColor: config?.secondaryColor || "#3b82f6",
+                      accentColor: config?.accentColor || "#10b981",
+                      enableSecondaryColor: !!config?.enableSecondaryColor,
+                      enableAccentColor: !!config?.enableAccentColor,
+                    });
+                    showToast({
+                      type: "info",
+                      title: "ย้อนกลับสีธีมเป็นค่าที่บันทึกไว้แล้ว",
+                    });
+                  };
+
+                  const renderMiniUiCard = (
+                    label: string,
+                    badgeText: string,
+                    isDraftCard: boolean,
+                    colors: { primary: string; secondary: string; accent: string }
+                  ) => (
+                    <div
+                      style={
+                        {
+                          "--theme-primary": colors.primary,
+                          "--theme-secondary": colors.secondary,
+                          "--theme-accent": colors.accent,
+                        } as React.CSSProperties
+                      }
+                      className={`rounded-xl border overflow-hidden bg-slate-50 ${
+                        isDraftCard ? "border-primary/40 ring-2 ring-primary/10" : "border-slate-200"
+                      }`}
+                    >
+                      <div className="px-3 py-2 bg-slate-100/80 border-b border-slate-200 flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-extrabold text-slate-700">{label}</span>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                            isDraftCard
+                              ? "bg-primary text-white"
+                              : "bg-white text-slate-600 border border-slate-200"
+                          }`}
+                        >
+                          {badgeText}
+                        </span>
+                      </div>
+
+                      {/* Mini Palette Strip */}
+                      <div className="grid grid-cols-3 border-b border-slate-200 bg-white text-[10px]">
+                        <div className="p-2 flex items-center gap-1.5 border-r border-slate-100 min-w-0">
+                          <span
+                            className="w-4 h-4 rounded shrink-0 border border-black/10"
+                            style={{ backgroundColor: colors.primary }}
+                          />
+                          <div className="min-w-0">
+                            <div className="text-slate-400 font-semibold leading-none">หลัก</div>
+                            <div className="font-mono font-bold text-slate-700 uppercase truncate mt-0.5">
+                              {colors.primary}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="p-2 flex items-center gap-1.5 border-r border-slate-100 min-w-0">
+                          <span
+                            className="w-4 h-4 rounded shrink-0 border border-black/10"
+                            style={{ backgroundColor: colors.secondary }}
+                          />
+                          <div className="min-w-0">
+                            <div className="text-slate-400 font-semibold leading-none">รอง</div>
+                            <div className="font-mono font-bold text-slate-700 uppercase truncate mt-0.5">
+                              {colors.secondary}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="p-2 flex items-center gap-1.5 min-w-0">
+                          <span
+                            className="w-4 h-4 rounded shrink-0 border border-black/10"
+                            style={{ backgroundColor: colors.accent }}
+                          />
+                          <div className="min-w-0">
+                            <div className="text-slate-400 font-semibold leading-none">พิเศษ</div>
+                            <div className="font-mono font-bold text-slate-700 uppercase truncate mt-0.5">
+                              {colors.accent}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Mini Simulated App UI */}
+                      <div className="p-3 space-y-2.5">
+                        <div className="bg-white px-3 py-2 rounded-lg border border-slate-200 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="w-2.5 h-2.5 rounded-sm bg-primary shrink-0" />
+                            <span className="text-xs font-extrabold text-slate-800 truncate">
+                              {localConfig.eventName || "EventTicketingPro"}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-bold text-primary border-b-2 border-primary pb-0.5 shrink-0">
+                            จองที่นั่ง
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button
+                              type="button"
+                              className="px-2.5 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-[11px] font-bold shadow-sm transition cursor-default"
+                            >
+                              ปุ่มหลัก (ชี้เพื่อดู Hover)
+                            </button>
+                            <span className="px-2 py-1.5 rounded-lg bg-secondary-light text-secondary border border-secondary/30 text-[11px] font-bold">
+                              ป้ายรอง
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="px-2.5 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-[11px] font-bold shadow-sm tabular-nums transition cursor-default"
+                          >
+                            ชำระ ฿3,500
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
 
                   return (
                     <div
@@ -3858,20 +4002,32 @@ export default function AdminDashboardView({
                         <div>
                           <label className="text-sm font-extrabold text-slate-800 flex items-center gap-1.5">
                             <Palette className="w-4 h-4 text-primary shrink-0" />
-                            ระบบธีมสีแบรนด์ (Brand Theme System)
+                            ระบบธีมสีแบรนด์และการเปรียบเทียบสี (Brand Theme &amp; Color Comparison)
                           </label>
                           <p className="text-xs text-slate-500 mt-0.5">
-                            เลือกชุดธีมสำเร็จรูปหรือกำหนดรหัสสี Hex เอง พร้อมแสดงผลจริงทันทีทั่วทั้งระบบ
+                            เลือกชุดธีมหรือกำหนดสี Hex เอง พร้อมเปรียบเทียบเฉดสี ความคมชัด และตัวอย่างหน้างานจริงแบบเรียลไทม์
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={handleResetThemeColors}
-                          className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>รีเซ็ตธีมเริ่มต้น</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {hasThemeChanges && (
+                            <button
+                              type="button"
+                              onClick={handleRevertThemeToSaved}
+                              className="text-xs px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                            >
+                              <ArrowLeft className="w-3 h-3" />
+                              <span>กลับสีเดิมที่บันทึก</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleResetThemeColors}
+                            className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>รีเซ็ตธีมเริ่มต้น</span>
+                          </button>
+                        </div>
                       </div>
 
                       {/* Curated Theme Presets */}
@@ -3884,11 +4040,9 @@ export default function AdminDashboardView({
                             const isSelected =
                               previewPrimary.toLowerCase() === preset.primary.toLowerCase() &&
                               (!localConfig.enableSecondaryColor ||
-                                normalizeHexColor(localConfig.secondaryColor).toLowerCase() ===
-                                  preset.secondary.toLowerCase()) &&
+                                previewSecondaryRaw.toLowerCase() === preset.secondary.toLowerCase()) &&
                               (!localConfig.enableAccentColor ||
-                                normalizeHexColor(localConfig.accentColor).toLowerCase() ===
-                                  preset.accent.toLowerCase());
+                                previewAccentRaw.toLowerCase() === preset.accent.toLowerCase());
                             return (
                               <button
                                 key={preset.id}
@@ -3940,74 +4094,107 @@ export default function AdminDashboardView({
                       {/* Primary Brand Color */}
                       <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2.5">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <label className="text-xs font-extrabold text-slate-800">
-                            สีธีมหลัก (Primary Brand Color)
-                          </label>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] font-bold text-slate-400">Preview:</span>
-                            <div
-                              className="w-6 h-6 rounded-md bg-primary shadow-sm border border-black/10"
-                              title="สีหลัก (Primary)"
-                            />
-                            <div
-                              className="w-6 h-6 rounded-md bg-primary-hover shadow-sm border border-black/10"
-                              title="สีเมื่อชี้เมาส์ (Hover)"
-                            />
-                            <div
-                              className="w-6 h-6 rounded-md bg-primary-light border border-slate-200 shadow-sm"
-                              title="สีพื้นหลังอ่อน (Light)"
-                            />
+                          <div>
+                            <label className="text-xs font-extrabold text-slate-800 block">
+                              สีธีมหลัก (Primary Brand Color)
+                            </label>
+                            <span className="text-[11px] text-slate-500">
+                              ใช้กับปุ่มหลัก แถบเมนู active และโลโก้
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex flex-col items-center gap-0.5">
+                              <div
+                                className="w-8 h-6 rounded-md bg-primary shadow-sm border border-black/10 flex items-center justify-center text-[10px] font-bold text-white"
+                                title={`สีปกติ: ${previewPrimary.toUpperCase()}`}
+                              >
+                                Aa
+                              </div>
+                              <span className="text-[9px] text-slate-400 font-semibold">ปกติ</span>
+                            </div>
+                            <div className="flex flex-col items-center gap-0.5">
+                              <div
+                                className="w-8 h-6 rounded-md bg-primary-hover shadow-sm border border-black/10 flex items-center justify-center text-[10px] font-bold text-white"
+                                title={`สี Hover: ${getHoverShadeHex(previewPrimary).toUpperCase()}`}
+                              >
+                                Aa
+                              </div>
+                              <span className="text-[9px] text-slate-400 font-semibold">Hover</span>
+                            </div>
+                            <div className="flex flex-col items-center gap-0.5">
+                              <div
+                                className="w-8 h-6 rounded-md bg-primary-light border border-slate-200 shadow-sm flex items-center justify-center text-[10px] font-bold text-primary"
+                                title={`พื้นอ่อน: ${getLightTintHex(previewPrimary).toUpperCase()}`}
+                              >
+                                Aa
+                              </div>
+                              <span className="text-[9px] text-slate-400 font-semibold">พื้นอ่อน</span>
+                            </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-2.5 pt-1">
                           <input
                             type="color"
                             value={previewPrimary}
                             onChange={(e) =>
                               handleUpdateLocalConfig({ themeColor: e.target.value })
                             }
-                            className="w-12 h-10 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
+                            className="w-11 h-9 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
                           />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="text"
-                                value={primaryHexInput}
-                                maxLength={7}
-                                onChange={(e) => {
-                                  const nextVal = e.target.value.toUpperCase();
-                                  setPrimaryHexInput(nextVal);
-                                  if (isValidHexColor(nextVal)) {
-                                    handleUpdateLocalConfig({ themeColor: nextVal.toLowerCase() });
-                                  }
-                                }}
-                                onBlur={() => {
-                                  setPrimaryHexInput(previewPrimary.toUpperCase());
-                                }}
-                                className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none focus:border-primary"
-                                placeholder="#E11D48"
-                              />
-                              <span className="text-[11px] text-slate-500 truncate">
-                                ใช้กับปุ่มหลัก แถบเมนู active และโลโก้
-                              </span>
-                            </div>
+                          <input
+                            type="text"
+                            value={primaryHexInput}
+                            maxLength={7}
+                            onChange={(e) => {
+                              let nextVal = e.target.value.toUpperCase().replace(/[^0-9A-F#]/g, "");
+                              if (nextVal.length === 6 && !nextVal.startsWith("#")) {
+                                nextVal = `#${nextVal}`;
+                              }
+                              setPrimaryHexInput(nextVal);
+                              if (isValidHexColor(nextVal)) {
+                                handleUpdateLocalConfig({ themeColor: nextVal.toLowerCase() });
+                              }
+                            }}
+                            onBlur={() => {
+                              setPrimaryHexInput(previewPrimary.toUpperCase());
+                            }}
+                            className={`w-28 px-2.5 py-1.5 rounded-lg border text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none ${
+                              isValidHexColor(primaryHexInput)
+                                ? "border-slate-200 focus:border-primary"
+                                : "border-rose-300 bg-rose-50/40"
+                            }`}
+                            placeholder="#E11D48"
+                          />
+                          <div
+                            className={`flex-1 min-w-[200px] flex flex-wrap items-center justify-between gap-2 text-[11px] font-medium px-2.5 py-1.5 rounded-lg ${
+                              primaryContrast.level === "low"
+                                ? "bg-amber-50 text-amber-800 border border-amber-200"
+                                : "bg-slate-50 text-slate-600 border border-slate-100"
+                            }`}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              {primaryContrast.level === "low" ? (
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                              ) : (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              )}
+                              <span>{primaryContrast.label}</span>
+                            </span>
+                            {primaryContrast.level === "low" && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateLocalConfig({
+                                    themeColor: suggestAccessibleShade(previewPrimary),
+                                  })
+                                }
+                                className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold transition cursor-pointer"
+                              >
+                                ปรับเข้มให้อ่านง่าย
+                              </button>
+                            )}
                           </div>
-                        </div>
-
-                        <div
-                          className={`flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1.5 rounded-lg ${
-                            primaryContrast.level === "low"
-                              ? "bg-amber-50 text-amber-700 border border-amber-200"
-                              : "bg-slate-50 text-slate-600 border border-slate-100"
-                          }`}
-                        >
-                          {primaryContrast.level === "low" ? (
-                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          ) : (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                          )}
-                          <span>{primaryContrast.label}</span>
                         </div>
                       </div>
 
@@ -4036,46 +4223,105 @@ export default function AdminDashboardView({
                             />
                           </label>
                         </div>
-                        {localConfig.enableSecondaryColor && (
-                          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
-                            <div className="flex items-center gap-2.5">
-                              <input
-                                type="color"
-                                value={normalizeHexColor(localConfig.secondaryColor, "#3b82f6")}
-                                onChange={(e) =>
-                                  handleUpdateLocalConfig({ secondaryColor: e.target.value })
-                                }
-                                className="w-10 h-9 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
-                              />
-                              <input
-                                type="text"
-                                value={secondaryHexInput}
-                                maxLength={7}
-                                onChange={(e) => {
-                                  const nextVal = e.target.value.toUpperCase();
-                                  setSecondaryHexInput(nextVal);
-                                  if (isValidHexColor(nextVal)) {
-                                    handleUpdateLocalConfig({
-                                      secondaryColor: nextVal.toLowerCase(),
-                                    });
+
+                        {localConfig.enableSecondaryColor ? (
+                          <div className="space-y-2 pt-2 border-t border-slate-100">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-center gap-2.5">
+                                <input
+                                  type="color"
+                                  value={previewSecondaryRaw}
+                                  onChange={(e) =>
+                                    handleUpdateLocalConfig({ secondaryColor: e.target.value })
                                   }
-                                }}
-                                onBlur={() =>
-                                  setSecondaryHexInput(
-                                    normalizeHexColor(
-                                      localConfig.secondaryColor,
-                                      "#3b82f6"
-                                    ).toUpperCase()
-                                  )
-                                }
-                                className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none focus:border-primary"
-                                placeholder="#3B82F6"
-                              />
+                                  className="w-10 h-9 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
+                                />
+                                <input
+                                  type="text"
+                                  value={secondaryHexInput}
+                                  maxLength={7}
+                                  onChange={(e) => {
+                                    let nextVal = e.target.value.toUpperCase().replace(/[^0-9A-F#]/g, "");
+                                    if (nextVal.length === 6 && !nextVal.startsWith("#")) {
+                                      nextVal = `#${nextVal}`;
+                                    }
+                                    setSecondaryHexInput(nextVal);
+                                    if (isValidHexColor(nextVal)) {
+                                      handleUpdateLocalConfig({
+                                        secondaryColor: nextVal.toLowerCase(),
+                                      });
+                                    }
+                                  }}
+                                  onBlur={() =>
+                                    setSecondaryHexInput(previewSecondaryRaw.toUpperCase())
+                                  }
+                                  className={`w-28 px-2.5 py-1.5 rounded-lg border text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none ${
+                                    isValidHexColor(secondaryHexInput)
+                                      ? "border-slate-200 focus:border-primary"
+                                      : "border-rose-300 bg-rose-50/40"
+                                  }`}
+                                  placeholder="#3B82F6"
+                                />
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-1 rounded-md border ${
+                                    secondaryContrast.level === "low"
+                                      ? "bg-amber-50 text-amber-700 border-amber-200"
+                                      : "bg-slate-50 text-slate-600 border-slate-200"
+                                  }`}
+                                >
+                                  {secondaryContrast.shortLabel}
+                                </span>
+                                {secondaryContrast.level === "low" && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdateLocalConfig({
+                                        secondaryColor: suggestAccessibleShade(previewSecondaryRaw),
+                                      })
+                                    }
+                                    className="px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold transition cursor-pointer"
+                                  >
+                                    ปรับเข้มอัตโนมัติ
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <div
+                                    className="w-7 h-5 rounded bg-secondary border border-black/10 flex items-center justify-center text-[9px] font-bold text-white"
+                                    title={`สีปกติ: ${previewSecondary.toUpperCase()}`}
+                                  >
+                                    Aa
+                                  </div>
+                                  <span className="text-[9px] text-slate-400">ปกติ</span>
+                                </div>
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <div
+                                    className="w-7 h-5 rounded bg-secondary-hover border border-black/10 flex items-center justify-center text-[9px] font-bold text-white"
+                                    title={`Hover: ${getHoverShadeHex(previewSecondary).toUpperCase()}`}
+                                  >
+                                    Aa
+                                  </div>
+                                  <span className="text-[9px] text-slate-400">Hover</span>
+                                </div>
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <div
+                                    className="w-7 h-5 rounded bg-secondary-light border border-slate-200 flex items-center justify-center text-[9px] font-bold text-secondary"
+                                    title={`พื้นอ่อน: ${getLightTintHex(previewSecondary).toUpperCase()}`}
+                                  >
+                                    Aa
+                                  </div>
+                                  <span className="text-[9px] text-slate-400">พื้นอ่อน</span>
+                                </div>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-1.5">
-                              <div className="w-5 h-5 rounded bg-secondary border border-black/10" />
-                              <div className="w-5 h-5 rounded bg-secondary-hover border border-black/10" />
-                              <div className="w-5 h-5 rounded bg-secondary-light border border-slate-200" />
+                          </div>
+                        ) : (
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                            <span>ปิดใช้งานแยกสี — ระบบจะใช้เฉดเดียวกับสีธีมหลัก ({previewPrimary.toUpperCase()})</span>
+                            <div className="flex items-center gap-1 opacity-75">
+                              <span className="w-4 h-4 rounded bg-secondary border border-black/10" />
+                              <span className="w-4 h-4 rounded bg-secondary-light border border-slate-200" />
                             </div>
                           </div>
                         )}
@@ -4106,88 +4352,178 @@ export default function AdminDashboardView({
                             />
                           </label>
                         </div>
-                        {localConfig.enableAccentColor && (
-                          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
-                            <div className="flex items-center gap-2.5">
-                              <input
-                                type="color"
-                                value={normalizeHexColor(localConfig.accentColor, "#10b981")}
-                                onChange={(e) =>
-                                  handleUpdateLocalConfig({ accentColor: e.target.value })
-                                }
-                                className="w-10 h-9 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
-                              />
-                              <input
-                                type="text"
-                                value={accentHexInput}
-                                maxLength={7}
-                                onChange={(e) => {
-                                  const nextVal = e.target.value.toUpperCase();
-                                  setAccentHexInput(nextVal);
-                                  if (isValidHexColor(nextVal)) {
-                                    handleUpdateLocalConfig({
-                                      accentColor: nextVal.toLowerCase(),
-                                    });
+
+                        {localConfig.enableAccentColor ? (
+                          <div className="space-y-2 pt-2 border-t border-slate-100">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-center gap-2.5">
+                                <input
+                                  type="color"
+                                  value={previewAccentRaw}
+                                  onChange={(e) =>
+                                    handleUpdateLocalConfig({ accentColor: e.target.value })
                                   }
-                                }}
-                                onBlur={() =>
-                                  setAccentHexInput(
-                                    normalizeHexColor(
-                                      localConfig.accentColor,
-                                      "#10b981"
-                                    ).toUpperCase()
-                                  )
-                                }
-                                className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none focus:border-primary"
-                                placeholder="#10B981"
-                              />
+                                  className="w-10 h-9 rounded-lg cursor-pointer shrink-0 bg-transparent border border-slate-200 p-0.5"
+                                />
+                                <input
+                                  type="text"
+                                  value={accentHexInput}
+                                  maxLength={7}
+                                  onChange={(e) => {
+                                    let nextVal = e.target.value.toUpperCase().replace(/[^0-9A-F#]/g, "");
+                                    if (nextVal.length === 6 && !nextVal.startsWith("#")) {
+                                      nextVal = `#${nextVal}`;
+                                    }
+                                    setAccentHexInput(nextVal);
+                                    if (isValidHexColor(nextVal)) {
+                                      handleUpdateLocalConfig({
+                                        accentColor: nextVal.toLowerCase(),
+                                      });
+                                    }
+                                  }}
+                                  onBlur={() =>
+                                    setAccentHexInput(previewAccentRaw.toUpperCase())
+                                  }
+                                  className={`w-28 px-2.5 py-1.5 rounded-lg border text-xs font-mono font-bold text-slate-800 uppercase focus:outline-none ${
+                                    isValidHexColor(accentHexInput)
+                                      ? "border-slate-200 focus:border-primary"
+                                      : "border-rose-300 bg-rose-50/40"
+                                  }`}
+                                  placeholder="#10B981"
+                                />
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-1 rounded-md border ${
+                                    accentContrast.level === "low"
+                                      ? "bg-amber-50 text-amber-700 border-amber-200"
+                                      : "bg-slate-50 text-slate-600 border-slate-200"
+                                  }`}
+                                >
+                                  {accentContrast.shortLabel}
+                                </span>
+                                {accentContrast.level === "low" && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdateLocalConfig({
+                                        accentColor: suggestAccessibleShade(previewAccentRaw),
+                                      })
+                                    }
+                                    className="px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold transition cursor-pointer"
+                                  >
+                                    ปรับเข้มอัตโนมัติ
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <div
+                                    className="w-7 h-5 rounded bg-accent border border-black/10 flex items-center justify-center text-[9px] font-bold text-white"
+                                    title={`สีปกติ: ${previewAccent.toUpperCase()}`}
+                                  >
+                                    Aa
+                                  </div>
+                                  <span className="text-[9px] text-slate-400">ปกติ</span>
+                                </div>
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <div
+                                    className="w-7 h-5 rounded bg-accent-hover border border-black/10 flex items-center justify-center text-[9px] font-bold text-white"
+                                    title={`Hover: ${getHoverShadeHex(previewAccent).toUpperCase()}`}
+                                  >
+                                    Aa
+                                  </div>
+                                  <span className="text-[9px] text-slate-400">Hover</span>
+                                </div>
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <div
+                                    className="w-7 h-5 rounded bg-accent-light border border-slate-200 flex items-center justify-center text-[9px] font-bold text-accent"
+                                    title={`พื้นอ่อน: ${getLightTintHex(previewAccent).toUpperCase()}`}
+                                  >
+                                    Aa
+                                  </div>
+                                  <span className="text-[9px] text-slate-400">พื้นอ่อน</span>
+                                </div>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-1.5">
-                              <div className="w-5 h-5 rounded bg-accent border border-black/10" />
-                              <div className="w-5 h-5 rounded bg-accent-hover border border-black/10" />
-                              <div className="w-5 h-5 rounded bg-accent-light border border-slate-200" />
+                          </div>
+                        ) : (
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                            <span>ปิดใช้งานแยกสี — ระบบจะใช้เฉดเดียวกับสีธีมหลัก ({previewPrimary.toUpperCase()})</span>
+                            <div className="flex items-center gap-1 opacity-75">
+                              <span className="w-4 h-4 rounded bg-accent border border-black/10" />
+                              <span className="w-4 h-4 rounded bg-accent-light border border-slate-200" />
                             </div>
                           </div>
                         )}
                       </div>
 
-                      {/* Live Interactive Component Preview */}
+                      {/* Side-by-Side Color Comparison & Live Component Preview */}
                       <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
                             <Sparkles className="w-3.5 h-3.5 text-primary" />
-                            ตัวอย่างการแสดงผลหน้างานจริง
+                            {hasThemeChanges
+                              ? "เปรียบเทียบสีและการแสดงผล (ธีมเดิม vs ธีมใหม่)"
+                              : "ตัวอย่างการแสดงผลและสัดส่วนสีปัจจุบัน"}
                           </span>
-                          <span className="text-[10px] text-slate-400">
-                            {hasChanges ? "กำลังพรีวิวค่าใหม่" : "ตรงกับค่าที่บันทึก"}
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                              hasThemeChanges
+                                ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            }`}
+                          >
+                            {hasThemeChanges ? "กำลังเปรียบเทียบค่าใหม่" : "ตรงกับค่าที่บันทึกใช้งานอยู่"}
                           </span>
                         </div>
-                        <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-50">
-                          <div className="bg-white px-3 py-2 border-b border-slate-200 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="w-2.5 h-2.5 rounded-sm bg-primary shrink-0" />
-                              <span className="text-xs font-extrabold text-slate-800 truncate">
-                                {localConfig.eventName || "EventTicketingPro"}
-                              </span>
-                            </div>
-                            <span className="text-[10px] font-bold text-primary border-b-2 border-primary pb-0.5 shrink-0">
-                              จองที่นั่ง
+
+                        {/* Color Balance Bar (60 / 30 / 10 Visual Ratio) */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 font-semibold">
+                            <span>สัดส่วนคู่สีที่เลือก (Primary / Secondary / Accent)</span>
+                            <span>
+                              {previewPrimary.toUpperCase()} • {previewSecondary.toUpperCase()} •{" "}
+                              {previewAccent.toUpperCase()}
                             </span>
                           </div>
-                          <div className="p-3 flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-sm">
-                                ปุ่มหลัก (Primary)
-                              </span>
-                              <span className="px-2.5 py-1.5 rounded-lg bg-secondary-light text-secondary border border-secondary/30 text-[11px] font-bold">
-                                ป้ายข้อมูลรอง (Secondary)
-                              </span>
-                            </div>
-                            <span className="px-3 py-1.5 rounded-lg bg-accent text-white text-[11px] font-bold shadow-sm tabular-nums">
-                              ชำระเงิน ฿3,500 (Accent)
-                            </span>
+                          <div className="h-2.5 w-full rounded-full overflow-hidden flex border border-slate-200/80">
+                            <div
+                              className="h-full transition-all"
+                              style={{ width: "55%", backgroundColor: previewPrimary }}
+                              title={`สีหลัก ${previewPrimary.toUpperCase()}`}
+                            />
+                            <div
+                              className="h-full transition-all"
+                              style={{ width: "30%", backgroundColor: previewSecondary }}
+                              title={`สีรอง ${previewSecondary.toUpperCase()}`}
+                            />
+                            <div
+                              className="h-full transition-all"
+                              style={{ width: "15%", backgroundColor: previewAccent }}
+                              title={`สีพิเศษ ${previewAccent.toUpperCase()}`}
+                            />
                           </div>
                         </div>
+
+                        {hasThemeChanges ? (
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                            {renderMiniUiCard("1. ธีมปัจจุบัน (ก่อนแก้ไข)", "บันทึกอยู่", false, {
+                              primary: savedPrimary,
+                              secondary: savedSecondary,
+                              accent: savedAccent,
+                            })}
+                            {renderMiniUiCard("2. ธีมใหม่ (หลังปรับแต่ง)", "ตัวอย่างใหม่", true, {
+                              primary: previewPrimary,
+                              secondary: previewSecondary,
+                              accent: previewAccent,
+                            })}
+                          </div>
+                        ) : (
+                          renderMiniUiCard("ตัวอย่างการแสดงผลหน้างานจริง", "ใช้งานอยู่", true, {
+                            primary: previewPrimary,
+                            secondary: previewSecondary,
+                            accent: previewAccent,
+                          })
+                        )}
                       </div>
 
                       {/* Quick Save / Discard Bar inside Branding Card */}
@@ -4202,7 +4538,7 @@ export default function AdminDashboardView({
                               onClick={handleResetConfig}
                               className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-xs font-bold transition cursor-pointer whitespace-nowrap"
                             >
-                              ยกเลิก
+                              ยกเลิกทั้งหมด
                             </button>
                             <button
                               type="button"

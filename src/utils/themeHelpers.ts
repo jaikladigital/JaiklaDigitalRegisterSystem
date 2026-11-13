@@ -70,7 +70,13 @@ export function normalizeHexColor(val: unknown, fallback = '#e11d48'): string {
   return fallback;
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
+export function rgbToHex(r: number, g: number, b: number): string {
+  const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)));
+  const toHex = (n: number) => clamp(n).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+export function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const normalized = normalizeHexColor(hex);
   const intVal = parseInt(normalized.slice(1), 16);
   return {
@@ -78,6 +84,22 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
     g: (intVal >> 8) & 255,
     b: intVal & 255,
   };
+}
+
+export function mixHexColors(hexA: string, hexB: string, weightA: number): string {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  const wA = Math.max(0, Math.min(1, weightA));
+  const wB = 1 - wA;
+  return rgbToHex(a.r * wA + b.r * wB, a.g * wA + b.g * wB, a.b * wA + b.b * wB);
+}
+
+export function getHoverShadeHex(hex: string): string {
+  return mixHexColors(hex, '#000000', 0.8);
+}
+
+export function getLightTintHex(hex: string): string {
+  return mixHexColors(hex, '#ffffff', 0.1);
 }
 
 function getRelativeLuminance(hex: string): number {
@@ -89,14 +111,39 @@ function getRelativeLuminance(hex: string): number {
   return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
 }
 
+export function getPairContrastRatio(hexA: string, hexB: string): number {
+  const lumA = getRelativeLuminance(hexA);
+  const lumB = getRelativeLuminance(hexB);
+  const lighter = Math.max(lumA, lumB);
+  const darker = Math.min(lumA, lumB);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 export function getContrastRatioAgainstWhite(hex: string): number {
-  const lum = getRelativeLuminance(hex);
-  return (1.0 + 0.05) / (lum + 0.05);
+  return getPairContrastRatio(hex, '#ffffff');
+}
+
+/**
+ * Progressively darkens a color until it meets at least minRatio contrast against white.
+ */
+export function suggestAccessibleShade(hex: string, minRatio = 4.55): string {
+  let candidate = normalizeHexColor(hex);
+  if (getContrastRatioAgainstWhite(candidate) >= minRatio) {
+    return candidate;
+  }
+  for (let step = 95; step >= 10; step -= 3) {
+    const mixed = mixHexColors(candidate, '#000000', step / 100);
+    if (getContrastRatioAgainstWhite(mixed) >= minRatio) {
+      return mixed;
+    }
+  }
+  return '#1e293b';
 }
 
 export interface ContrastFeedback {
   ratio: number;
   level: 'excellent' | 'good' | 'low';
+  shortLabel: string;
   label: string;
 }
 
@@ -107,19 +154,22 @@ export function getContrastFeedback(hex: string): ContrastFeedback {
     return {
       ratio: rounded,
       level: 'excellent',
-      label: `ความคมชัดดีเยี่ยม (${rounded}:1) อ่านง่ายบนปุ่มสีขาว`,
+      shortLabel: `คมชัดดีเยี่ยม ${rounded}:1`,
+      label: `ความคมชัดดีเยี่ยม (${rounded}:1) อ่านง่ายบนปุ่มข้อความสีขาว`,
     };
   }
   if (ratio >= 3.0) {
     return {
       ratio: rounded,
       level: 'good',
+      shortLabel: `คมชัดปานกลาง ${rounded}:1`,
       label: `ความคมชัดปานกลาง (${rounded}:1) เหมาะกับหัวข้อและปุ่มขนาดใหญ่`,
     };
   }
   return {
     ratio: rounded,
     level: 'low',
-    label: `สีค่อนข้างสว่าง (${rounded}:1) ตัวอักษรสีขาวบนปุ่มอาจอ่านยาก แนะนำเฉดที่เข้มขึ้น`,
+    shortLabel: `สีสว่าง ${rounded}:1`,
+    label: `สีค่อนข้างสว่าง (${rounded}:1) ตัวอักษรสีขาวบนปุ่มอาจอ่านยาก แนะนำปรับเข้มขึ้น`,
   };
 }

@@ -578,6 +578,27 @@ export default function App() {
     await logStaffAction('REDEEM_DRINKS', `Redeemed drinks: ${detailList.join(', ')} for Ticket ${ticketId}${seatId ? ` Seat ${seatId}` : ''}`, ticketId, { drinks, totalQty: newCount - (t.drinksRedeemed || 0) });
   };
 
+  const activePrimaryColor =
+    view === 'ADMIN' && themePreview?.themeColor ? themePreview.themeColor : (config.themeColor || '#e11d48');
+  const activeEnableSecondary =
+    view === 'ADMIN' && themePreview ? !!themePreview.enableSecondaryColor : !!config.enableSecondaryColor;
+  const activeSecondaryColor = activeEnableSecondary
+    ? (view === 'ADMIN' && themePreview?.secondaryColor ? themePreview.secondaryColor : (config.secondaryColor || '#3b82f6'))
+    : activePrimaryColor;
+  const activeEnableAccent =
+    view === 'ADMIN' && themePreview ? !!themePreview.enableAccentColor : !!config.enableAccentColor;
+  const activeAccentColor = activeEnableAccent
+    ? (view === 'ADMIN' && themePreview?.accentColor ? themePreview.accentColor : (config.accentColor || '#10b981'))
+    : activePrimaryColor;
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const rootStyle = document.documentElement.style;
+    rootStyle.setProperty('--theme-primary', activePrimaryColor);
+    rootStyle.setProperty('--theme-secondary', activeSecondaryColor);
+    rootStyle.setProperty('--theme-accent', activeAccentColor);
+  }, [activePrimaryColor, activeSecondaryColor, activeAccentColor]);
+
   return (
     <ConfigContext.Provider value={{ config, setConfig: async (newConfig: any) => {
       // Allow passing a function like useState updater
@@ -615,13 +636,9 @@ export default function App() {
       `}} />
       <div 
         style={{
-          '--theme-primary': (view === 'ADMIN' && themePreview?.themeColor) ? themePreview.themeColor : config.themeColor,
-          '--theme-secondary': ((view === 'ADMIN' && themePreview) ? themePreview.enableSecondaryColor : config.enableSecondaryColor)
-            ? ((view === 'ADMIN' && themePreview?.secondaryColor) ? themePreview.secondaryColor : config.secondaryColor)
-            : ((view === 'ADMIN' && themePreview?.themeColor) ? themePreview.themeColor : config.themeColor),
-          '--theme-accent': ((view === 'ADMIN' && themePreview) ? themePreview.enableAccentColor : config.enableAccentColor)
-            ? ((view === 'ADMIN' && themePreview?.accentColor) ? themePreview.accentColor : config.accentColor)
-            : ((view === 'ADMIN' && themePreview?.themeColor) ? themePreview.themeColor : config.themeColor)
+          '--theme-primary': activePrimaryColor,
+          '--theme-secondary': activeSecondaryColor,
+          '--theme-accent': activeAccentColor,
         } as React.CSSProperties} 
         className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24 md:pb-0 print:bg-white print:pb-0 print:min-h-0 print:h-auto print:overflow-visible"
       >
