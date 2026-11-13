@@ -1036,6 +1036,7 @@ export default function App() {
                 
                 // Track IDs in new tables
                 const nextIds = new Set(nextTables.map((t: Table) => t.id));
+                const prevMap = new Map(tables.map((t: Table) => [t.id, t]));
                 
                 // Delete tables that are no longer present
                 const deletePromises = [];
@@ -1045,10 +1046,13 @@ export default function App() {
                   }
                 }
                 
-                // Add or update new tables
+                // Add or update only changed/new tables
                 const updatePromises = [];
                 for (const t of nextTables) {
-                  updatePromises.push(updateTable(t));
+                  const prev = prevMap.get(t.id);
+                  if (!prev || JSON.stringify(prev) !== JSON.stringify(t)) {
+                    updatePromises.push(updateTable(t));
+                  }
                 }
                 
                 await Promise.all([...deletePromises, ...updatePromises]);
@@ -1056,15 +1060,19 @@ export default function App() {
               tickets={myTickets} 
               setMyTickets={async (action: any) => {
                 const nextTickets = typeof action === 'function' ? action(myTickets) : action;
-                for (const t of nextTickets) {
-                  // Admin dashboard might add a new ticket or update
-                  const existing = myTickets.find(x => x.id === t.id);
+                const existingMap = new Map(myTickets.map(x => [x.id, x]));
+                const writePromises = nextTickets.map((t: TicketPayload) => {
+                  const existing = existingMap.get(t.id);
                   if (existing) {
-                    await updateTicket(t.id, t);
+                    if (JSON.stringify(existing) !== JSON.stringify(t)) {
+                      return updateTicket(t.id, t);
+                    }
+                    return Promise.resolve();
                   } else {
-                    await addTicket(t);
+                    return addTicket(t);
                   }
-                }
+                });
+                await Promise.all(writePromises);
               }} 
               surveys={surveys} 
               pendingEmails={pendingEmails} 

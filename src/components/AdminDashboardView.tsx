@@ -50,6 +50,10 @@ import {
   ChevronDown,
   Lock,
   Timer,
+  CheckCircle2,
+  AlertCircle,
+  Info,
+  X,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { SURVEY_TOPICS } from "./SurveyView";
@@ -57,6 +61,12 @@ import { ConfigContext } from "../ConfigContext";
 import UserManagementView from "./UserManagementView";
 import StaffLogsView from "./StaffLogsView";
 import { storage, auth, db, handleFirestoreError, OperationType } from "../lib/firebase";
+import {
+  clearTicketsAndReleaseSeats,
+  executeChunkedBatch,
+  getFriendlyFirestoreError,
+  sanitizeForFirestore,
+} from "../lib/firebaseCollections";
 import { ref, deleteObject } from "firebase/storage";
 import {
   collection,
@@ -595,6 +605,7 @@ export default function AdminDashboardView({
   const [bGpPercent, setBGpPercent] = useState(15);
   const [showSurveyClearConfirm, setShowSurveyClearConfirm] = useState(false);
   const [isClearingSurveys, setIsClearingSurveys] = useState(false);
+  const [isConfirmProcessing, setIsConfirmProcessing] = useState(false);
   const [customConfirm, setCustomConfirm] = useState<{
     isOpen: boolean;
     title: string;
@@ -604,6 +615,39 @@ export default function AdminDashboardView({
     onConfirm: () => void | Promise<void>;
   } | null>(null);
 
+  type ToastType = 'success' | 'error' | 'warning' | 'info';
+  interface ToastItem {
+    id: string;
+    type: ToastType;
+    title: string;
+    message?: string;
+    details?: string;
+  }
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [expandedToastDetails, setExpandedToastDetails] = useState<Record<string, boolean>>({});
+
+  const dismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const showToast = (opts: {
+    type?: ToastType;
+    title: string;
+    message?: string;
+    details?: string;
+    durationMs?: number;
+  }) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const type = opts.type || 'info';
+    setToasts((prev) => [...prev.slice(-3), { id, type, title: opts.title, message: opts.message, details: opts.details }]);
+    const duration = opts.durationMs ?? (type === 'error' ? 9000 : 5000);
+    if (duration > 0) {
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, duration);
+    }
+  };
+
   const showConfirm = (options: {
     title: string;
     message: string;
@@ -611,6 +655,7 @@ export default function AdminDashboardView({
     colorType?: 'rose' | 'amber' | 'indigo' | 'slate';
     onConfirm: () => void | Promise<void>;
   }) => {
+    setIsConfirmProcessing(false);
     setCustomConfirm({
       isOpen: true,
       ...options,
@@ -641,11 +686,19 @@ export default function AdminDashboardView({
       if (data.groupId) {
         setLatestGroupId(data.groupId);
       } else {
-        alert("ยังไม่มี Group ID ใหม่ (ตรวจสอบให้แน่ใจว่าได้ดึงบอทเข้ากลุ่มแล้ว)");
+        showToast({
+          type: 'info',
+          title: 'ยังไม่มี Group ID ใหม่',
+          message: 'ตรวจสอบให้แน่ใจว่าได้ดึงบอทเข้ากลุ่ม LINE แล้ว',
+        });
       }
     } catch (e) {
       console.error(e);
-      alert("Failed to fetch Group ID");
+      showToast({
+        type: 'error',
+        title: 'ไม่สามารถดึงข้อมูล Group ID ได้',
+        message: 'กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่อีกครั้ง',
+      });
     }
   };
 
@@ -738,9 +791,19 @@ export default function AdminDashboardView({
     try {
       await setConfig(localConfig);
       setHasChanges(false);
-      alert("บันทึกการตั้งค่าสำเร็จ");
+      showToast({
+        type: 'success',
+        title: 'บันทึกการตั้งค่าสำเร็จ',
+        message: 'การเปลี่ยนแปลงข้อมูลงานได้รับการบันทึกเรียบร้อยแล้ว',
+      });
     } catch (e) {
-      alert("เกิดข้อผิดพลาดในการบันทึกการตั้งค่า");
+      const friendly = getFriendlyFirestoreError(e);
+      showToast({
+        type: 'error',
+        title: 'เกิดข้อผิดพลาดในการบันทึกการตั้งค่า',
+        message: friendly.message,
+        details: friendly.details,
+      });
       console.error(e);
     }
   };
@@ -748,9 +811,19 @@ export default function AdminDashboardView({
   const handleSaveYoutubeLink = async () => {
     try {
       await setConfig((prev: any) => ({ ...prev, emailYoutubeLink: localConfig.emailYoutubeLink }));
-      alert("บันทึกลิงก์ YouTube ลงฐานข้อมูลสำเร็จแล้ว! (YouTube Link Saved)");
+      showToast({
+        type: 'success',
+        title: 'บันทึกลิงก์ YouTube สำเร็จ',
+        message: 'บันทึกลิงก์ YouTube ลงฐานข้อมูลเรียบร้อยแล้ว',
+      });
     } catch (e) {
-      alert("เกิดข้อผิดพลาดในการบันทึกลิงก์ YouTube");
+      const friendly = getFriendlyFirestoreError(e);
+      showToast({
+        type: 'error',
+        title: 'เกิดข้อผิดพลาดในการบันทึกลิงก์ YouTube',
+        message: friendly.message,
+        details: friendly.details,
+      });
       console.error(e);
     }
   };
@@ -826,12 +899,24 @@ export default function AdminDashboardView({
         } else {
           handleUpdateLocalConfig({ emailTemplateSubject: data.translation });
         }
+        showToast({
+          type: 'success',
+          title: 'แปลข้อความเรียบร้อยแล้ว',
+        });
       } else {
-        alert(data.error || "Failed to translate");
+        showToast({
+          type: 'error',
+          title: 'ไม่สามารถแปลข้อความได้',
+          message: data.error || 'Failed to translate',
+        });
       }
     } catch (e) {
       console.error(e);
-      alert("Error connecting to translation API");
+      showToast({
+        type: 'error',
+        title: 'ไม่สามารถเชื่อมต่อระบบแปลภาษาได้',
+        message: 'กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่',
+      });
     } finally {
       setIsTranslating(false);
     }
@@ -856,33 +941,12 @@ export default function AdminDashboardView({
     try {
       if (isMockMode) {
         const mockTickets = tickets.filter((t) => t.isMock);
-        const delTickets = mockTickets.map((t) =>
-          deleteDoc(doc(db, "tickets", t.id)),
-        );
-
-        const mockTableUpdates: Record<string, any> = {};
-        mockTickets.forEach((t) => {
-          if (!mockTableUpdates[t.tableId]) {
-            const tb = tables.find((x) => x.id === t.tableId);
-            if (tb) mockTableUpdates[t.tableId] = JSON.parse(JSON.stringify(tb));
-          }
-          if (mockTableUpdates[t.tableId]) {
-            t.seatIds?.forEach((sId) => {
-              const s = mockTableUpdates[t.tableId].seats.find(
-                (x: any) => x.id === sId,
-              );
-              if (s) {
-                s.status = "available";
-                delete s.ticketId;
-              }
-            });
-          }
+        await clearTicketsAndReleaseSeats(mockTickets, tables);
+        showToast({
+          type: 'success',
+          title: 'ปิดโหมดจำลองเรียบร้อยแล้ว',
+          message: 'ข้อมูลการจองจำลองถูกลบออกและยอดกลับสู่ข้อมูลจริงแล้ว',
         });
-        const updateTables = Object.values(mockTableUpdates).map((tb: any) =>
-          setDoc(doc(db, "tables", tb.id), tb),
-        );
-        await Promise.all([...delTickets, ...updateTables]);
-        alert("ปิดโหมดจำลอง ยอดกลับสู่ความจริงแล้ว (Mock Data Disabled)");
       } else {
         const newTickets: any[] = [];
         const tableUpdates: Record<string, any> = {};
@@ -922,18 +986,25 @@ export default function AdminDashboardView({
           if (modified) tableUpdates[tb.id] = tbData;
         });
 
-        const addTickets = newTickets.map((t) =>
-          setDoc(doc(db, "tickets", t.id), t),
-        );
-        const updateTbs = Object.values(tableUpdates).map((tb: any) =>
-          setDoc(doc(db, "tables", tb.id), tb),
-        );
-        await Promise.all([...addTickets, ...updateTbs]);
-        alert("เปิดโหมดจำลอง นำเข้าข้อมูลการจองปลอมสำเร็จ! (Mock Data Enabled)");
+        await executeChunkedBatch([
+          ...newTickets.map((t) => ({ type: 'set' as const, collectionName: 'tickets', id: t.id, data: t })),
+          ...Object.values(tableUpdates).map((tb: any) => ({ type: 'set' as const, collectionName: 'tables', id: tb.id, data: tb })),
+        ]);
+        showToast({
+          type: 'success',
+          title: 'เปิดโหมดจำลองสำเร็จ',
+          message: `นำเข้าข้อมูลการจองจำลองจำนวน ${newTickets.length} รายการเรียบร้อยแล้ว`,
+        });
       }
     } catch (err) {
       console.error(err);
-      alert("เกิดข้อผิดพลาดในการเปิด/ปิดโหมดจำลอง");
+      const friendly = getFriendlyFirestoreError(err);
+      showToast({
+        type: 'error',
+        title: 'เกิดข้อผิดพลาดในการเปิด/ปิดโหมดจำลอง',
+        message: friendly.message,
+        details: friendly.details,
+      });
     }
     setIsTogglingMock(false);
   };
@@ -1141,7 +1212,11 @@ export default function AdminDashboardView({
   const handleSaveBooth = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bFormName || !bFormOwner) {
-      alert("กรุณากรอกชื่อบูธและชื่อผู้ดูแล!");
+      showToast({
+        type: 'warning',
+        title: 'ข้อมูลไม่ครบถ้วน',
+        message: 'กรุณากรอกชื่อบูธและชื่อผู้ดูแลให้ครบถ้วน',
+      });
       return;
     }
     setBFormIsSaving(true);
@@ -1192,9 +1267,19 @@ export default function AdminDashboardView({
       setBFormPromptPayId("");
       setBFormPromptPayName("");
       setBFormDesc("");
+      showToast({
+        type: 'success',
+        title: bFormId ? 'แก้ไขข้อมูลบูธสำเร็จ' : 'เพิ่มบูธใหม่สำเร็จ',
+      });
     } catch (err) {
       console.error("Save booth error", err);
-      alert("เกิดข้อผิดพลาดในการบันทึกบูธ!");
+      const friendly = getFriendlyFirestoreError(err);
+      showToast({
+        type: 'error',
+        title: 'เกิดข้อผิดพลาดในการบันทึกบูธ',
+        message: friendly.message,
+        details: friendly.details,
+      });
     } finally {
       setBFormIsSaving(false);
     }
@@ -1216,9 +1301,20 @@ export default function AdminDashboardView({
             uid: auth.currentUser?.uid || "Admin",
             timestamp: Date.now(),
           });
+          showToast({
+            type: 'success',
+            title: 'ลบบูธสำเร็จ',
+            message: `นำบูธ "${boothName}" ออกจากระบบเรียบร้อยแล้ว`,
+          });
         } catch (err) {
           console.error("Delete booth error", err);
-          alert("เกิดข้อผิดพลาดในการลบบูธ!");
+          const friendly = getFriendlyFirestoreError(err);
+          showToast({
+            type: 'error',
+            title: 'เกิดข้อผิดพลาดในการลบบูธ',
+            message: friendly.message,
+            details: friendly.details,
+          });
         }
       }
     });
@@ -1288,7 +1384,11 @@ export default function AdminDashboardView({
       saveAs(content, `all_slips_${new Date().getTime()}.zip`);
     } catch (err) {
       console.error("Error creating zip", err);
-      alert("เกิดข้อผิดพลาดในการดาวน์โหลด กรุณาลองใหม่อีกครั้ง");
+      showToast({
+        type: 'error',
+        title: 'เกิดข้อผิดพลาดในการดาวน์โหลดสลิป',
+        message: 'กรุณาลองใหม่อีกครั้ง',
+      });
     } finally {
       setIsDownloading(false);
     }
@@ -1649,48 +1749,42 @@ export default function AdminDashboardView({
         <div className="flex gap-2">
           <button
             onClick={() => {
+              const regularTickets = tickets.filter((t) => !t.isSponsor);
+              if (regularTickets.length === 0) {
+                showToast({
+                  type: 'info',
+                  title: 'ไม่พบตั๋วการจองทั่วไปในระบบ',
+                  message: 'ขณะนี้ไม่มียอดขายที่นั่งทั่วไปที่ต้องล้างข้อมูล',
+                });
+                return;
+              }
+              const seatCount = regularTickets.reduce((acc, t) => acc + (t.seatIds?.length || 0), 0);
               showConfirm({
                 title: "คุณแน่ใจหรือไม่ที่จะล้างยอดขายที่นั่ง?",
-                message: "การล้างยอดขายที่นั่งจะทําให้ตั๋วการจองทั่วไปที่ไม่ใช่สปอนเซอร์ถูกลบออกจากระบบ และปรับปรุงสถานะที่นั่งเหล่านั้นให้เป็นว่าง คุณแน่ใจหรือไม่?",
+                message: `พบตั๋วการจองทั่วไปจำนวน ${regularTickets.length} ใบ (${seatCount} ที่นั่ง) การดำเนินการนี้จะลบตั๋วดังกล่าวออกจากระบบทั้งหมด และคืนสถานะที่นั่งเหล่านั้นให้เป็นว่างอย่างถาวร คุณแน่ใจหรือไม่?`,
                 confirmText: "ใช่, ยืนยันล้างยอดขาย",
                 colorType: "rose",
                 onConfirm: async () => {
                   try {
-                    const regularTickets = tickets.filter((t) => !t.isSponsor);
-                    const regularTicketIds = new Set(regularTickets.map((t) => t.id));
-
-                    const deletePromises = regularTickets.map((t) =>
-                      deleteDoc(doc(db, "tickets", t.id)),
-                    );
-
-                    const updatePromises = tables.map((t) => {
-                      const nextT = {
-                        ...t,
-                        seats: t.seats.map((s) => {
-                          if (s.ticketId && regularTicketIds.has(s.ticketId)) {
-                            return {
-                              ...s,
-                              status: "available" as const,
-                              ticketId: undefined,
-                            };
-                          }
-                          return s;
-                        }),
-                      };
-                      return setDoc(doc(db, "tables", t.id), nextT);
-                    });
-
-                    await Promise.all([...deletePromises, ...updatePromises]);
-                    
+                    const result = await clearTicketsAndReleaseSeats(regularTickets, tables);
                     await logStaffAction(
                       "CLEAR_REGULAR_TICKETS",
-                      `Cleared ${regularTickets.length} regular ticket(s) and reset corresponding seats to available`
+                      `Cleared ${result.deletedCount} regular ticket(s) and reset ${result.releasedSeatsCount} seat(s) across ${result.updatedTablesCount} table(s)`
                     );
-
-                    alert("ล้างยอดขายที่นั่ง (เฉพาะตั๋วทั่วไป) และคืนสิทธิ์ที่นั่งว่างสำเร็จเรียบร้อยแล้ว!");
+                    showToast({
+                      type: 'success',
+                      title: 'ล้างยอดขายที่นั่งสำเร็จ',
+                      message: `ลบตั๋วทั่วไป ${result.deletedCount} ใบ และคืนสิทธิ์ที่นั่งว่าง ${result.releasedSeatsCount} ที่นั่งเรียบร้อยแล้ว`,
+                    });
                   } catch (err) {
-                    console.error(err);
-                    alert("เกิดข้อผิดพลาดในการล้างยอดขายที่นั่ง: " + (err instanceof Error ? err.message : String(err)));
+                    console.error("Error clearing regular tickets:", err);
+                    const friendly = getFriendlyFirestoreError(err);
+                    showToast({
+                      type: 'error',
+                      title: 'เกิดข้อผิดพลาดในการล้างยอดขายที่นั่ง',
+                      message: friendly.message,
+                      details: friendly.details,
+                    });
                   }
                 }
               });
@@ -1701,48 +1795,42 @@ export default function AdminDashboardView({
           </button>
           <button
             onClick={() => {
+              const sponsorTickets = tickets.filter((t) => t.isSponsor);
+              if (sponsorTickets.length === 0) {
+                showToast({
+                  type: 'info',
+                  title: 'ไม่พบข้อมูลบัตรสปอนเซอร์ในระบบ',
+                  message: 'ขณะนี้ไม่มีรายการตั๋วผู้สนับสนุน (Sponsor) ที่ต้องล้างยอด',
+                });
+                return;
+              }
+              const sponsorSeatCount = sponsorTickets.reduce((acc, t) => acc + (t.seatIds?.length || 0), 0);
               showConfirm({
                 title: "คุณแน่ใจหรือไม่ที่จะล้างยอดบัตรสปอนเซอร์?",
-                message: "การล้างยอดบัตรสปอนเซอร์จะทําให้ตั๋วผู้สนับสนุน (Sponsor) ทั้งหมดถูกลบออกจากระบบ และปรับปรุงสถานะที่นั่งเหล่านั้นให้เป็นว่าง คุณแน่ใจหรือไม่?",
-                confirmText: "ใช่, ยืนยันล้างยอดบัตรสปอนเซอร์",
+                message: `พบตั๋วผู้สนับสนุน (Sponsor) จำนวน ${sponsorTickets.length} ใบ (${sponsorSeatCount} ที่นั่ง) การล้างยอดจะลบตั๋วผู้สนับสนุนทั้งหมดออกจากระบบ และปรับสถานะที่นั่งเหล่านั้นให้กลับมาว่าง คุณแน่ใจหรือไม่?`,
+                confirmText: "ยืนยันล้างยอดสปอนเซอร์",
                 colorType: "rose",
                 onConfirm: async () => {
                   try {
-                    const sponsorTickets = tickets.filter((t) => t.isSponsor);
-                    const sponsorTicketIds = new Set(sponsorTickets.map((t) => t.id));
-
-                    const deletePromises = sponsorTickets.map((t) =>
-                      deleteDoc(doc(db, "tickets", t.id)),
-                    );
-
-                    const updatePromises = tables.map((t) => {
-                      const nextT = {
-                        ...t,
-                        seats: t.seats.map((s) => {
-                          if (s.ticketId && sponsorTicketIds.has(s.ticketId)) {
-                            return {
-                              ...s,
-                              status: "available" as const,
-                              ticketId: undefined,
-                            };
-                          }
-                          return s;
-                        }),
-                      };
-                      return setDoc(doc(db, "tables", t.id), nextT);
-                    });
-
-                    await Promise.all([...deletePromises, ...updatePromises]);
-
+                    const result = await clearTicketsAndReleaseSeats(sponsorTickets, tables);
                     await logStaffAction(
                       "CLEAR_SPONSOR_TICKETS",
-                      `Cleared ${sponsorTickets.length} sponsor ticket(s) and reset corresponding seats to available`
+                      `Cleared ${result.deletedCount} sponsor ticket(s) and reset ${result.releasedSeatsCount} seat(s) across ${result.updatedTablesCount} table(s)`
                     );
-
-                    alert("ล้างยอดบัตรสปอนเซอร์ และคืนสิทธิ์ที่นั่งว่างสำเร็จเรียบร้อยแล้ว!");
+                    showToast({
+                      type: 'success',
+                      title: 'ล้างยอดบัตรสปอนเซอร์สำเร็จ',
+                      message: `ลบตั๋วผู้สนับสนุน ${result.deletedCount} ใบ และคืนสิทธิ์ที่นั่งว่าง ${result.releasedSeatsCount} ที่นั่งเรียบร้อยแล้ว`,
+                    });
                   } catch (err) {
                     console.error("Error clearing sponsor tickets:", err);
-                    alert("เกิดข้อผิดพลาดในการล้างยอดบัตรสปอนเซอร์: " + (err instanceof Error ? err.message : String(err)));
+                    const friendly = getFriendlyFirestoreError(err);
+                    showToast({
+                      type: 'error',
+                      title: 'เกิดข้อผิดพลาดในการล้างยอดบัตรสปอนเซอร์',
+                      message: friendly.message,
+                      details: friendly.details,
+                    });
                   }
                 }
               });
@@ -2822,16 +2910,25 @@ export default function AdminDashboardView({
                           },
                           (err) => {
                             if (err.code === err.PERMISSION_DENIED) {
-                              alert(
-                                "ระบบถูกปฏิเสธการเข้าถึงตำแหน่ง\n\nการใช้งานนี้ต้องการสิทธิ์ดึงตำแหน่งของคุณ กรุณากดยินยอม (Allow Location) บนป๊อปอัปแจ้งเตือน หรือเข้าไปอนุญาตในการตั้งค่าเบราว์เซอร์ (Site Settings -> Location)",
-                              );
+                              showToast({
+                                type: 'warning',
+                                title: 'ระบบถูกปฏิเสธการเข้าถึงตำแหน่ง',
+                                message: 'กรุณากดยินยอม (Allow Location) บนป๊อปอัปแจ้งเตือน หรืออนุญาตในการตั้งค่าเบราว์เซอร์ (Site Settings -> Location)',
+                              });
                             } else {
-                              alert("ไม่สามารถดึงตำแหน่งได้: " + err.message);
+                              showToast({
+                                type: 'error',
+                                title: 'ไม่สามารถดึงตำแหน่งได้',
+                                message: err.message,
+                              });
                             }
                           },
                         );
                       } else {
-                        alert("เบราว์เซอร์ของคุณไม่รองรับการดึงตำแหน่ง");
+                        showToast({
+                          type: 'warning',
+                          title: 'เบราว์เซอร์ของคุณไม่รองรับการดึงตำแหน่ง',
+                        });
                       }
                     }}
                     className="mt-3 text-xs bg-white border border-slate-200 px-3 py-1.5 rounded-lg font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-1"
@@ -3503,10 +3600,14 @@ export default function AdminDashboardView({
                                     })),
                                   }));
 
-                                  const saveTablePromises = cleanTables.map((t) =>
-                                    setDoc(doc(db, "tables", t.id), t)
+                                  await executeChunkedBatch(
+                                    cleanTables.map((t) => ({
+                                      type: "set" as const,
+                                      collectionName: "tables",
+                                      id: t.id,
+                                      data: t,
+                                    }))
                                   );
-                                  await Promise.all(saveTablePromises);
 
                                   await setTables(cleanTables);
 
@@ -3516,10 +3617,20 @@ export default function AdminDashboardView({
                                     "Cleared all seat reservations and associated tickets/surveys while keeping existing table counts intact"
                                   );
 
-                                  alert("ล้างข้อมูลการจองแต่ละที่นั่งเสร็จสิ้น โดยรักษารายชื่อและจำนวนโต๊ะตามระบบเดิมเรียบร้อยแล้ว!");
+                                  showToast({
+                                    type: 'success',
+                                    title: 'ล้างข้อมูลการจองเรียบร้อยแล้ว',
+                                    message: 'ล้างข้อมูลการจองแต่ละที่นั่งเสร็จสิ้น โดยรักษารายชื่อและจำนวนโต๊ะตามระบบเดิม',
+                                  });
                                 } catch (err) {
                                   console.error(err);
-                                  alert("เกิดข้อผิดพลาดในการล้างข้อมูลการจอง");
+                                  const friendly = getFriendlyFirestoreError(err);
+                                  showToast({
+                                    type: 'error',
+                                    title: 'เกิดข้อผิดพลาดในการล้างข้อมูลการจอง',
+                                    message: friendly.message,
+                                    details: friendly.details,
+                                  });
                                 }
 
                                 setIsSaving(false);
@@ -5265,9 +5376,11 @@ export default function AdminDashboardView({
                               });
                               if (res.ok) {
                                 const data = await res.json();
-                                alert(
-                                  `ส่งอีเมลสำเร็จ! (Provider: ${data.provider})`,
-                                );
+                                showToast({
+                                  type: 'success',
+                                  title: 'ส่งอีเมลสำเร็จ',
+                                  message: `ส่งอีเมลผ่าน ${data.provider} เรียบร้อยแล้ว`,
+                                });
                                 if (setPendingEmails) {
                                   setPendingEmails((prev: PendingEmail[]) =>
                                     prev.map((e) =>
@@ -5279,12 +5392,18 @@ export default function AdminDashboardView({
                                 }
                               } else {
                                 const data = await res.json();
-                                alert(
-                                  `Failed: ${data.error || "Unknown Error"}`,
-                                );
+                                showToast({
+                                  type: 'error',
+                                  title: 'ส่งอีเมลไม่สำเร็จ',
+                                  message: data.error || 'Unknown Error',
+                                });
                               }
                             } catch (e: any) {
-                              alert(`Failed to send: ${e.message}`);
+                              showToast({
+                                type: 'error',
+                                title: 'ส่งอีเมลไม่สำเร็จ',
+                                message: e.message,
+                              });
                             }
                           }}
                           className="bg-primary text-white hover:bg-rose-700 px-4 py-2 rounded-xl font-bold transition flex items-center gap-2"
@@ -5631,16 +5750,31 @@ export default function AdminDashboardView({
                         targetUserId: localConfig.lineAdminUserId,
                       });
                       if (res === null) {
-                        alert("การตั้งค่า LINE ไม่สมบูรณ์ (Channel ID หรือ Secret หายไป)");
+                        showToast({
+                          type: 'warning',
+                          title: 'การตั้งค่า LINE ไม่สมบูรณ์',
+                          message: 'กรุณาตรวจสอบ Channel ID หรือ Channel Secret',
+                        });
                       } else {
-                        alert("ส่งทดสอบ LINE Messaging API สำเร็จ");
+                        showToast({
+                          type: 'success',
+                          title: 'ส่งทดสอบ LINE Messaging API สำเร็จ',
+                        });
                       }
                     } else {
-                      alert("โปรดเปิดใช้งาน LINE Messaging API (รับแจ้งเตือน) ก่อนทำการทดสอบ");
+                      showToast({
+                        type: 'warning',
+                        title: 'ยังไม่ได้เปิดใช้งาน LINE Messaging API',
+                        message: 'โปรดเปิดใช้งาน LINE Messaging API (รับแจ้งเตือน) ก่อนทำการทดสอบ',
+                      });
                     }
                   } catch (err: any) {
                     console.error(err);
-                    alert("ทดสอบล้มเหลว: " + err.message);
+                    showToast({
+                      type: 'error',
+                      title: 'ทดสอบส่ง LINE ไม่สำเร็จ',
+                      message: err.message,
+                    });
                   }
                 }}
                 className="px-4 py-2 bg-[#00B900] text-white rounded-lg font-bold hover:opacity-90 w-full sm:w-auto"
@@ -6315,6 +6449,7 @@ export default function AdminDashboardView({
           localConfig={localConfig}
           activeZones={activeZones}
           setPendingEmails={setPendingEmails}
+          onNotify={showToast}
         />
       ) : null}
 
@@ -6520,9 +6655,11 @@ export default function AdminDashboardView({
                     }
                     if (!setMyTickets || !setTables) {
                       console.warn("Missing setter limits");
-                      alert(
-                        "เกิดข้อผิดพลาด: ไม่สามารถบันทึกข้อมูลได้ (Missing state mutators)",
-                      );
+                      showToast({
+                        type: 'error',
+                        title: 'ไม่สามารถบันทึกข้อมูลได้',
+                        message: 'Missing state mutators',
+                      });
                       return;
                     }
 
@@ -6576,14 +6713,23 @@ export default function AdminDashboardView({
                         const alloc = allocArray.find(
                           (a: any) => a.tableId === t.id,
                         );
+                        const matchingTicket = newTickets.find(
+                          (tk) => tk.tableId === t.id,
+                        );
                         if (alloc) {
                           return {
                             ...t,
-                            seats: t.seats.map((s: any) =>
-                              (alloc.seatIds || []).includes(s.id)
-                                ? { ...s, status: "paid" }
-                                : s,
-                            ),
+                            seats: t.seats.map((s: any) => {
+                              if ((alloc.seatIds || []).includes(s.id)) {
+                                const { lockedUntil, lockedBySession, ...rest } = s;
+                                return {
+                                  ...rest,
+                                  status: "paid",
+                                  ...(matchingTicket ? { ticketId: matchingTicket.id } : {}),
+                                };
+                              }
+                              return s;
+                            }),
                           };
                         }
                         return t;
@@ -6718,9 +6864,11 @@ export default function AdminDashboardView({
                           });
 
                           if (res.ok) {
-                            alert(
-                              `ออกบัตรสปอนเซอร์และส่งอีเมลอัตโนมัติสำเร็จ!`,
-                            );
+                            showToast({
+                              type: 'success',
+                              title: 'ออกบัตรสปอนเซอร์สำเร็จ',
+                              message: 'ออกบัตรและส่งอีเมลอัตโนมัติให้ผู้สนับสนุนเรียบร้อยแล้ว',
+                            });
                           } else {
                             const errData = await res.json();
                             throw new Error(
@@ -6737,22 +6885,36 @@ export default function AdminDashboardView({
                               pendingData,
                               ...(prev || []),
                             ]);
-                          alert(
-                            `ออกบัตรสปอนเซอร์สำเร็จ แต่ส่งอีเมลอัตโนมัติล้มเหลว: ${sendErr.message}\\nอีเมลถูกบันทึกใน Failed/Pending Emails แล้ว`,
-                          );
+                          showToast({
+                            type: 'warning',
+                            title: 'ออกบัตรสปอนเซอร์สำเร็จ แต่อีเมลส่งไม่สำเร็จ',
+                            message: 'ระบบบันทึกอีเมลไว้ในเมนู "ติดตามอีเมล" เพื่อส่งซ้ำภายหลังแล้ว',
+                            details: sendErr.message,
+                          });
                         }
                       } catch (e: any) {
                         console.error("Draft email error:", e);
-                        alert(
-                          `ออกบัตรสำเร็จ แต่ระบบไม่สามารถจัดเตรียมอีเมลได้: ${e.message}`,
-                        );
+                        showToast({
+                          type: 'warning',
+                          title: 'ออกบัตรสำเร็จ แต่จัดเตรียมอีเมลไม่สำเร็จ',
+                          message: e.message,
+                        });
                       }
                     } else {
-                      alert("ออกบัตรสปอนเซอร์สำเร็จ!");
+                      showToast({
+                        type: 'success',
+                        title: 'ออกบัตรสปอนเซอร์สำเร็จ!',
+                      });
                     }
                   } catch (err: any) {
                     console.error("Sponsor ticket error:", err);
-                    alert("เกิดข้อผิดพลาดระหว่างการออกบัตร: " + err.message);
+                    const friendly = getFriendlyFirestoreError(err);
+                    showToast({
+                      type: 'error',
+                      title: 'เกิดข้อผิดพลาดระหว่างการออกบัตรสปอนเซอร์',
+                      message: friendly.message,
+                      details: friendly.details,
+                    });
                   }
                 }}
                 disabled={
@@ -8676,7 +8838,7 @@ export default function AdminDashboardView({
       {/* Custom Confirmation Modal */}
       {customConfirm && customConfirm.isOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999]">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-scale-up">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-slate-100 animate-scale-up">
             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 ${
               customConfirm.colorType === 'rose' ? 'bg-rose-50 text-rose-600' :
               customConfirm.colorType === 'amber' ? 'bg-amber-50 text-amber-600' :
@@ -8695,36 +8857,126 @@ export default function AdminDashboardView({
             <p className="text-slate-500 text-sm mb-6 leading-relaxed font-sans">
               {customConfirm.message}
             </p>
-            <div className="flex gap-3">
+            <div className="flex flex-col-reverse sm:flex-row gap-3">
               <button
                 type="button"
+                disabled={isConfirmProcessing}
                 onClick={() => setCustomConfirm(null)}
-                className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-all active:scale-95 font-sans"
+                className="sm:flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-bold rounded-xl text-sm transition-all active:scale-95 font-sans whitespace-nowrap"
               >
                 ยกเลิก
               </button>
               <button
                 type="button"
+                disabled={isConfirmProcessing}
                 onClick={async () => {
+                  setIsConfirmProcessing(true);
                   try {
                     await customConfirm.onConfirm();
                   } catch (e) {
                     console.error("Error in onConfirm:", e);
                   } finally {
+                    setIsConfirmProcessing(false);
                     setCustomConfirm(null);
                   }
                 }}
-                className={`flex-1 px-4 py-3 text-white font-bold rounded-xl text-sm shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5 font-sans ${
+                className={`sm:flex-1 px-5 py-3 text-white font-bold rounded-xl text-sm shadow-md transition-all active:scale-95 disabled:opacity-70 disabled:cursor-wait flex items-center justify-center gap-2 font-sans whitespace-nowrap ${
                   customConfirm.colorType === 'rose' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200' :
                   customConfirm.colorType === 'amber' ? 'bg-amber-500 hover:bg-amber-600 shadow-amber-200' :
                   customConfirm.colorType === 'indigo' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200' :
                   'bg-slate-700 hover:bg-slate-800 shadow-slate-200'
                 }`}
               >
-                {customConfirm.confirmText}
+                {isConfirmProcessing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                    <span>กำลังดำเนินการ...</span>
+                  </>
+                ) : (
+                  customConfirm.confirmText
+                )}
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Professional In-App Toast Notification Stack */}
+      {toasts.length > 0 && (
+        <div className="fixed top-4 right-4 z-[10000] flex flex-col gap-3 max-w-md w-[calc(100vw-2rem)] pointer-events-none">
+          {toasts.map((toast) => {
+            const isExpanded = Boolean(expandedToastDetails[toast.id]);
+            const palette =
+              toast.type === 'success'
+                ? 'bg-white border-emerald-200 text-slate-800'
+                : toast.type === 'error'
+                ? 'bg-white border-rose-200 text-slate-800'
+                : toast.type === 'warning'
+                ? 'bg-white border-amber-200 text-slate-800'
+                : 'bg-white border-indigo-200 text-slate-800';
+            const iconBox =
+              toast.type === 'success'
+                ? 'bg-emerald-50 text-emerald-600'
+                : toast.type === 'error'
+                ? 'bg-rose-50 text-rose-600'
+                : toast.type === 'warning'
+                ? 'bg-amber-50 text-amber-600'
+                : 'bg-indigo-50 text-indigo-600';
+
+            return (
+              <div
+                key={toast.id}
+                className={`pointer-events-auto rounded-2xl border shadow-xl p-4 flex items-start gap-3 animate-scale-up font-sans ${palette}`}
+              >
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${iconBox}`}>
+                  {toast.type === 'success' ? (
+                    <CheckCircle2 className="w-5 h-5" />
+                  ) : toast.type === 'error' ? (
+                    <AlertCircle className="w-5 h-5" />
+                  ) : toast.type === 'warning' ? (
+                    <ShieldAlert className="w-5 h-5" />
+                  ) : (
+                    <Info className="w-5 h-5" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-sm text-slate-900 leading-snug">{toast.title}</p>
+                  {toast.message && (
+                    <p className="text-xs text-slate-600 mt-1 leading-relaxed">{toast.message}</p>
+                  )}
+                  {toast.details && (
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedToastDetails((prev) => ({
+                            ...prev,
+                            [toast.id]: !prev[toast.id],
+                          }))
+                        }
+                        className="text-[11px] font-bold text-slate-400 hover:text-slate-600 underline"
+                      >
+                        {isExpanded ? 'ซ่อนรายละเอียดเชิงเทคนิค' : 'ดูรายละเอียดเชิงเทคนิค'}
+                      </button>
+                      {isExpanded && (
+                        <pre className="mt-1.5 p-2 rounded-lg bg-slate-50 border border-slate-200 text-[10px] text-slate-600 overflow-x-auto whitespace-pre-wrap break-all font-mono">
+                          {toast.details}
+                        </pre>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => dismissToast(toast.id)}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition shrink-0"
+                  aria-label="Close notification"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -8755,6 +9007,12 @@ interface MoveSeatsTabProps {
   localConfig: any;
   activeZones: any;
   setPendingEmails?: any;
+  onNotify?: (opts: {
+    type?: 'success' | 'error' | 'warning' | 'info';
+    title: string;
+    message?: string;
+    details?: string;
+  }) => void;
 }
 
 function MoveSeatsTab({
@@ -8764,7 +9022,8 @@ function MoveSeatsTab({
   setMyTickets,
   localConfig,
   activeZones,
-  setPendingEmails
+  setPendingEmails,
+  onNotify,
 }: MoveSeatsTabProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTicket, setSelectedTicket] = useState<TicketPayload | null>(null);
@@ -8830,7 +9089,11 @@ function MoveSeatsTab({
         if (requiredSeatsCount === 1) {
           setChosenSeats([seatId]);
         } else {
-          alert(`ตั๋วใบนี้จองไว้ทั้งหมด ${requiredSeatsCount} ที่นั่ง คุณสามารถเลือกได้ไม่เกินจำนวนที่นั่งเดิม (You can select up to ${requiredSeatsCount} seats)`);
+          onNotify?.({
+            type: 'warning',
+            title: 'เลือกที่นั่งเกินจำนวนที่กำหนด',
+            message: `ตั๋วใบนี้จองไว้ทั้งหมด ${requiredSeatsCount} ที่นั่ง คุณสามารถเลือกได้ไม่เกินจำนวนที่นั่งเดิม`,
+          });
         }
       } else {
         setChosenSeats(prev => [...prev, seatId].sort((a, b) => a - b));
@@ -8843,7 +9106,11 @@ function MoveSeatsTab({
     const requiredSeatsCount = selectedTicket.seatIds.length;
 
     if (chosenSeats.length !== requiredSeatsCount) {
-      alert(`กรุณาเลือกที่นั่งให้ครบทั้งหมด ${requiredSeatsCount} ที่นั่ง (ปัจจุบันเลือกแล้ว ${chosenSeats.length} ที่นั่ง)`);
+      onNotify?.({
+        type: 'warning',
+        title: 'กรุณาเลือกที่นั่งให้ครบจำนวน',
+        message: `ต้องเลือกทั้งหมด ${requiredSeatsCount} ที่นั่ง (ปัจจุบันเลือกแล้ว ${chosenSeats.length} ที่นั่ง)`,
+      });
       return;
     }
 
@@ -8865,10 +9132,10 @@ function MoveSeatsTab({
           return seat;
         });
 
-        await setDoc(doc(db, "tables", targetTableId), {
+        await setDoc(doc(db, "tables", targetTableId), sanitizeForFirestore({
           ...targetTable,
           seats: updatedSeats
-        }, { merge: true });
+        }), { merge: true });
 
       } else {
         const oldTableObj = tables.find(t => t.id === oldTableId);
@@ -8880,10 +9147,10 @@ function MoveSeatsTab({
             }
             return seat;
           });
-          await setDoc(doc(db, "tables", oldTableId), {
+          await setDoc(doc(db, "tables", oldTableId), sanitizeForFirestore({
             ...oldTableObj,
             seats: updatedOldSeats
-          }, { merge: true });
+          }), { merge: true });
         }
 
         const updatedNewSeats = targetTable.seats.map(seat => {
@@ -8892,10 +9159,10 @@ function MoveSeatsTab({
           }
           return seat;
         });
-        await setDoc(doc(db, "tables", targetTableId), {
+        await setDoc(doc(db, "tables", targetTableId), sanitizeForFirestore({
           ...targetTable,
           seats: updatedNewSeats
-        }, { merge: true });
+        }), { merge: true });
       }
 
       const updatedTicket = {
@@ -8903,7 +9170,7 @@ function MoveSeatsTab({
         tableId: targetTableId,
         seatIds: chosenSeats
       };
-      await setDoc(doc(db, "tickets", selectedTicket.id), updatedTicket, { merge: true });
+      await setDoc(doc(db, "tickets", selectedTicket.id), sanitizeForFirestore(updatedTicket), { merge: true });
 
       await logStaffAction(
         "MOVE_SEATS",
@@ -9000,28 +9267,49 @@ function MoveSeatsTab({
           });
 
           if (res.ok) {
-            alert(`ย้ายที่นั่งสำเร็จ และส่งอีเมลยืนยันใหม่ให้ลูกค้าเรียบร้อย!`);
+            onNotify?.({
+              type: 'success',
+              title: 'ย้ายที่นั่งสำเร็จ',
+              message: 'ย้ายที่นั่งและส่งอีเมลยืนยันใหม่ให้ลูกค้าเรียบร้อยแล้ว',
+            });
           } else {
             const errData = await res.json();
             console.error("Failed to auto-send email:", errData);
             if (setPendingEmails) {
               setPendingEmails((prev: PendingEmail[]) => [pendingData, ...(prev || [])]);
             }
-            alert(`ย้ายที่นั่งสำเร็จ แต่อีเมลส่งไม่สำเร็จ (บันทึกไว้ในเมนู 'ติดตามอีเมล' เพื่อส่งซ้ำภายหลัง)`);
+            onNotify?.({
+              type: 'warning',
+              title: 'ย้ายที่นั่งสำเร็จ แต่อีเมลส่งไม่สำเร็จ',
+              message: 'บันทึกไว้ในเมนู "ติดตามอีเมล" เพื่อส่งซ้ำภายหลังเรียบร้อยแล้ว',
+            });
           }
 
         } catch (mailErr: any) {
           console.error("Mail error:", mailErr);
-          alert(`ย้ายที่นั่งสำเร็จ แต่อีเมลส่งไม่สำเร็จ: ${mailErr.message}`);
+          onNotify?.({
+            type: 'warning',
+            title: 'ย้ายที่นั่งสำเร็จ แต่อีเมลส่งไม่สำเร็จ',
+            message: mailErr.message,
+          });
         }
       } else {
-        alert("ย้ายที่นั่งเรียบร้อยแล้ว!");
+        onNotify?.({
+          type: 'success',
+          title: 'ย้ายที่นั่งเรียบร้อยแล้ว',
+        });
       }
 
       setSelectedTicket(null);
     } catch (err: any) {
       console.error(err);
-      alert(`เกิดข้อผิดพลาดในการย้ายที่นั่ง: ${err.message}`);
+      const friendly = getFriendlyFirestoreError(err);
+      onNotify?.({
+        type: 'error',
+        title: 'เกิดข้อผิดพลาดในการย้ายที่นั่ง',
+        message: friendly.message,
+        details: friendly.details,
+      });
     } finally {
       setIsProcessing(false);
     }
