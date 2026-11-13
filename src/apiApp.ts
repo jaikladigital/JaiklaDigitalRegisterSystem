@@ -525,7 +525,27 @@ apiRouter.post('/notify', async (req, res) => {
   }
 });
 
-// Location Search Proxy (OpenStreetMap Nominatim)
+// Helper for safe upstream JSON fetch with short timeout
+async function fetchUpstreamJson(url: string, headers: Record<string, string>, timeoutMs = 3800): Promise<any | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const text = (await response.text()).trim();
+    if (!text.startsWith('{') && !text.startsWith('[')) return null;
+    return JSON.parse(text);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Location Search Proxy (Multi-provider: Photon + OpenStreetMap Nominatim + optional Google Geocoding)
 apiRouter.get('/location/search', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
@@ -533,44 +553,109 @@ apiRouter.get('/location/search', async (req, res) => {
       return res.status(400).json({ error: 'กรุณาระบุคำค้นหาอย่างน้อย 2 ตัวอักษร' });
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6`;
 
-    const searchUrl = new URL('https://nominatim.openstreetmap.org/search');
-    searchUrl.searchParams.set('format', 'json');
-    searchUrl.searchParams.set('q', q);
-    searchUrl.searchParams.set('limit', '6');
-    searchUrl.searchParams.set('addressdetails', '1');
-    searchUrl.searchParams.set('accept-language', 'th,en');
+    const nomUrl = new URL('https://nominatim.openstreetmap.org/search');
+    nomUrl.searchParams.set('format', 'json');
+    nomUrl.searchParams.set('q', q);
+    nomUrl.searchParams.set('limit', '6');
+    nomUrl.searchParams.set('addressdetails', '1');
+    nomUrl.searchParams.set('accept-language', 'th,en');
 
-    const response = await fetch(searchUrl.toString(), {
-      headers: {
-        'User-Agent': 'EventTicketingPro/1.0 (venue-location-picker)',
-        Accept: 'application/json',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+    const googleKey = process.env.GOOGLE_MAPS_API_KEY;
+    const googlePromise = googleKey
+      ? fetchUpstreamJson(
+          `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&language=th&region=th&key=${encodeURIComponent(googleKey)}`,
+          { Accept: 'application/json' },
+          3500
+        )
+      : Promise.resolve(null);
 
-    if (!response.ok) {
-      return res.status(502).json({ error: `Geocoding service returned ${response.status}` });
+    const [googleData, photonData, nomData] = await Promise.all([
+      googlePromise,
+      fetchUpstreamJson(photonUrl, { Accept: 'application/json', 'User-Agent': 'EventTicketingPro/1.0' }, 3800),
+      fetchUpstreamJson(
+        nomUrl.toString(),
+        { Accept: 'application/json', 'User-Agent': 'EventTicketingPro/1.0 (venue-location-picker)' },
+        3800
+      ),
+    ]);
+
+    const results: Array<{ placeId: string; name: string; displayName: string; lat: number; lng: number; type: string }> = [];
+
+    if (googleData?.status === 'OK' && Array.isArray(googleData.results)) {
+      for (const item of googleData.results) {
+        const lat = Number(item?.geometry?.location?.lat);
+        const lng = Number(item?.geometry?.location?.lng);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          const displayName = String(item.formatted_address || '');
+          results.push({
+            placeId: String(item.place_id || `g-${lat}-${lng}`),
+            name: displayName.split(',')[0]?.trim() || displayName,
+            displayName,
+            lat,
+            lng,
+            type: String(item.types?.[0] || 'place'),
+          });
+        }
+      }
     }
 
-    const data = await response.json();
-    const results = Array.isArray(data)
-      ? data.map((item: any) => ({
-          placeId: String(item.place_id || ''),
-          displayName: String(item.display_name || ''),
-          lat: Number(item.lat),
-          lng: Number(item.lon),
-          type: String(item.type || item.class || ''),
-        })).filter((item: any) => !isNaN(item.lat) && !isNaN(item.lng))
-      : [];
+    if (Array.isArray(photonData?.features)) {
+      for (const f of photonData.features) {
+        const coords = f?.geometry?.coordinates;
+        const lng = Array.isArray(coords) ? Number(coords[0]) : NaN;
+        const lat = Array.isArray(coords) ? Number(coords[1]) : NaN;
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          const p = f?.properties || {};
+          const name = String(p.name || p.street || p.city || 'สถานที่').trim();
+          const parts = [p.name, p.street, p.district, p.city || p.town, p.county, p.state, p.postcode, p.country]
+            .map((x) => (typeof x === 'string' ? x.trim() : ''))
+            .filter(Boolean);
+          const uniqueParts = parts.filter((part, idx) => parts.indexOf(part) === idx);
+          results.push({
+            placeId: `photon-${p.osm_type || 'N'}-${p.osm_id || results.length}`,
+            name,
+            displayName: uniqueParts.join(', ') || name,
+            lat,
+            lng,
+            type: String(p.osm_value || p.osm_key || p.type || ''),
+          });
+        }
+      }
+    }
 
-    return res.json({ results });
+    if (Array.isArray(nomData)) {
+      for (const item of nomData) {
+        const lat = Number(item?.lat);
+        const lng = Number(item?.lon);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          const displayName = String(item.display_name || '');
+          results.push({
+            placeId: String(item.place_id || `nom-${results.length}`),
+            name: String(item.name || displayName.split(',')[0] || '').trim() || displayName,
+            displayName,
+            lat,
+            lng,
+            type: String(item.type || item.class || ''),
+          });
+        }
+      }
+    }
+
+    // Deduplicate near-identical coordinates
+    const deduped: typeof results = [];
+    for (const r of results) {
+      const exists = deduped.some(
+        (d) => Math.hypot(d.lat - r.lat, d.lng - r.lng) < 0.0004 && d.name.toLowerCase() === r.name.toLowerCase()
+      );
+      if (!exists) deduped.push(r);
+    }
+
+    return res.json({ results: deduped.slice(0, 8) });
   } catch (error: any) {
     console.error('Location search error:', error);
-    return res.status(500).json({ error: error?.name === 'AbortError' ? 'หมดเวลาการค้นหาสถานที่' : (error.message || 'ไม่สามารถค้นหาสถานที่ได้') });
+    return res.status(200).json({ results: [], warning: error?.message || 'ไม่สามารถค้นหาสถานที่ได้ชั่วคราว' });
   }
 });
 
@@ -604,7 +689,7 @@ apiRouter.post('/location/resolve-url', async (req, res) => {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 7000);
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     const response = await fetch(parsed.toString(), {
       method: 'GET',
       redirect: 'follow',
@@ -645,19 +730,11 @@ apiRouter.get('/location/ip-approx', async (req, res) => {
       forwarded.startsWith('192.168.') ||
       /^172\.(1[6-9]|2\d|3[0-1])\./.test(forwarded);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
     const targetUrl = isPrivateIp
       ? 'https://ipwho.is/'
       : `https://ipwho.is/${encodeURIComponent(forwarded)}`;
 
-    const response = await fetch(targetUrl, { signal: controller.signal });
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      return res.status(502).json({ error: 'IP geolocation unavailable' });
-    }
-    const data: any = await response.json();
+    const data = await fetchUpstreamJson(targetUrl, { Accept: 'application/json' }, 4000);
     if (!data?.success || typeof data.latitude !== 'number' || typeof data.longitude !== 'number') {
       return res.status(404).json({ error: 'ไม่พบพิกัดจากเครือข่าย' });
     }
@@ -678,5 +755,13 @@ apiRouter.get('/location/ip-approx', async (req, res) => {
 // Mount the API router on both /api and root level
 app.use('/api', apiRouter);
 app.use(apiRouter);
+
+// Global JSON error middleware so API errors never render non-JSON HTML/text
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('Unhandled API error:', err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: err?.message || 'Internal Server Error' });
+  }
+});
 
 export default app;

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, prefer-const, no-empty, react-hooks/exhaustive-deps */
-import React, { useContext, useMemo, useState, useEffect } from "react";
+import React, { useContext, useMemo, useState, useEffect, useRef } from "react";
 import QRCode from "qrcode";
 import {
   generateTicketImage,
@@ -72,10 +72,15 @@ import {
   X,
 } from "lucide-react";
 import {
+  QUICK_PICK_VENUES,
+  VenueSearchResult,
   buildOpenStreetMapEmbedUrl,
   getResilientLocation,
   isValidCoordinates,
   parseCoordinatesFromText,
+  safeFetchJson,
+  searchPopularVenues,
+  searchVenueLocations,
 } from "../utils/locationHelpers";
 import {
   THEME_PRESETS,
@@ -733,10 +738,10 @@ export default function AdminDashboardView({
 
   // Location Picker states
   const [locationSearchQuery, setLocationSearchQuery] = useState("");
-  const [locationSearchResults, setLocationSearchResults] = useState<
-    Array<{ placeId: string; displayName: string; lat: number; lng: number; type?: string }>
-  >([]);
+  const [locationSearchResults, setLocationSearchResults] = useState<VenueSearchResult[]>([]);
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+  const [hasSearchedLocationEmpty, setHasSearchedLocationEmpty] = useState(false);
+  const venueSearchSeqRef = useRef(0);
   const [locationMapInput, setLocationMapInput] = useState("");
   const [isResolvingMapInput, setIsResolvingMapInput] = useState(false);
   const [isFetchingCurrentLocation, setIsFetchingCurrentLocation] = useState(false);
@@ -1134,42 +1139,98 @@ export default function AdminDashboardView({
     }
   };
 
-  const handleSearchVenueLocation = async () => {
-    const q = locationSearchQuery.trim();
+  const handleSelectVenuePlace = (place: VenueSearchResult) => {
+    const shortName = (place.name || place.displayName.split(",")[0] || "").trim() || place.displayName;
+    handleUpdateLocalConfig({
+      eventLat: place.lat.toFixed(6),
+      eventLng: place.lng.toFixed(6),
+      eventLocationName: shortName,
+    });
+    setLocationSearchQuery(shortName);
+    setLocationSearchResults([]);
+    setHasSearchedLocationEmpty(false);
+    setShowMapPreview(true);
+    showToast({
+      type: "success",
+      title: "เลือกสถานที่จัดงานแล้ว",
+      message: `${shortName} (${place.lat.toFixed(5)}, ${place.lng.toFixed(5)})`,
+    });
+  };
+
+  const handleSearchVenueLocation = async (queryOverride?: string, silentEmpty = false) => {
+    const q = (queryOverride ?? locationSearchQuery).trim();
     if (q.length < 2) {
-      showToast({
-        type: "warning",
-        title: "กรุณาพิมพ์ชื่อสถานที่อย่างน้อย 2 ตัวอักษร",
-        message: "เช่น ไบเทค บางนา, เซ็นทรัลเวิลด์, อิมแพ็ค เมืองทองธานี",
-      });
+      if (!silentEmpty) {
+        showToast({
+          type: "warning",
+          title: "กรุณาพิมพ์ชื่อสถานที่อย่างน้อย 2 ตัวอักษร",
+          message: "เช่น ไบเทค บางนา, เซ็นทรัลเวิลด์, อิมแพ็ค เมืองทองธานี",
+        });
+      }
       return;
     }
+
+    const requestSeq = ++venueSearchSeqRef.current;
+    // Show instant local popular venue matches immediately while live map search loads
+    const instantMatches = searchPopularVenues(q);
+    if (instantMatches.length > 0) {
+      setLocationSearchResults(instantMatches);
+      setHasSearchedLocationEmpty(false);
+    }
+
     setIsSearchingLocation(true);
     try {
-      const res = await fetch(`/api/location/search?q=${encodeURIComponent(q)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error || "ไม่สามารถค้นหาสถานที่ได้");
-      }
-      const results = Array.isArray(data?.results) ? data.results : [];
+      const { results } = await searchVenueLocations(q);
+      if (requestSeq !== venueSearchSeqRef.current) return;
+
       setLocationSearchResults(results);
-      if (results.length === 0) {
+      setHasSearchedLocationEmpty(results.length === 0);
+
+      if (results.length === 0 && !silentEmpty) {
         showToast({
           type: "info",
           title: "ไม่พบสถานที่ที่ตรงกับคำค้นหา",
-          message: "ลองค้นหาด้วยชื่อสั้นลง หรือวางลิงก์ Google Maps โดยตรงแทน",
+          message: "ลองค้นหาด้วยชื่อสั้นลง หรือวางลิงก์ Google Maps ในวิธีที่ 2 แทน",
         });
       }
     } catch (err: any) {
-      showToast({
-        type: "error",
-        title: "ค้นหาสถานที่ล้มเหลว",
-        message: err?.message || "กรุณาลองใหม่อีกครั้ง หรือวางลิงก์ Google Maps แทน",
-      });
+      if (requestSeq !== venueSearchSeqRef.current) return;
+      if (instantMatches.length === 0 && !silentEmpty) {
+        showToast({
+          type: "error",
+          title: "ค้นหาสถานที่ล้มเหลว",
+          message: err?.message || "กรุณาลองใหม่อีกครั้ง หรือวางลิงก์ Google Maps แทน",
+        });
+      }
     } finally {
-      setIsSearchingLocation(false);
+      if (requestSeq === venueSearchSeqRef.current) {
+        setIsSearchingLocation(false);
+      }
     }
   };
+
+  useEffect(() => {
+    const q = locationSearchQuery.trim();
+    // Skip auto-search if query already matches currently selected venue name
+    if (q.length < 2 || q === (localConfig.eventLocationName || "").trim()) {
+      if (q.length < 2) {
+        setHasSearchedLocationEmpty(false);
+      }
+      return;
+    }
+
+    const instant = searchPopularVenues(q);
+    if (instant.length > 0) {
+      setLocationSearchResults(instant);
+      setHasSearchedLocationEmpty(false);
+    }
+
+    const timer = setTimeout(() => {
+      handleSearchVenueLocation(q, true);
+    }, 550);
+
+    return () => clearTimeout(timer);
+  }, [locationSearchQuery]);
 
   const handleParseMapLinkOrCoords = async (rawOverride?: string) => {
     const raw = (rawOverride ?? locationMapInput).trim();
@@ -1201,17 +1262,22 @@ export default function AdminDashboardView({
     if (/^https?:\/\//i.test(raw)) {
       setIsResolvingMapInput(true);
       try {
-        const res = await fetch("/api/location/resolve-url", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: raw }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data?.error || "ไม่สามารถเปิดลิงก์ได้");
+        const res = await safeFetchJson<{ resolvedUrl?: string; htmlSnippet?: string; error?: string }>(
+          "/api/location/resolve-url",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: raw }),
+          },
+          6000
+        );
+        if (!res.ok || !res.isJson) {
+          throw new Error(
+            res.data?.error || "ไม่สามารถเปิดลิงก์ย่อได้อัตโนมัติ กรุณาเปิดลิงก์ในเบราว์เซอร์แล้วคัดลอกลิงก์เต็มหรือพิกัดตัวเลขมาวาง"
+          );
         }
-        const fromResolvedUrl = parseCoordinatesFromText(data?.resolvedUrl || "");
-        const fromHtml = fromResolvedUrl || parseCoordinatesFromText(data?.htmlSnippet || "");
+        const fromResolvedUrl = parseCoordinatesFromText(res.data?.resolvedUrl || "");
+        const fromHtml = fromResolvedUrl || parseCoordinatesFromText(res.data?.htmlSnippet || "");
         if (fromHtml) {
           handleUpdateLocalConfig({
             eventLat: fromHtml.lat.toFixed(6),
@@ -3443,21 +3509,42 @@ export default function AdminDashboardView({
                         <input
                           type="text"
                           value={locationSearchQuery}
-                          onChange={(e) => setLocationSearchQuery(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setLocationSearchQuery(val);
+                            if (val.trim().length < 2) {
+                              setLocationSearchResults([]);
+                              setHasSearchedLocationEmpty(false);
+                            }
+                          }}
                           onKeyDown={(e) => {
                             if (e.key === "Enter") {
                               e.preventDefault();
                               handleSearchVenueLocation();
                             }
                           }}
-                          placeholder="พิมพ์ชื่อสถานที่ เช่น ไบเทค บางนา, เซ็นทรัลเวิลด์, อิมแพ็ค..."
-                          className="w-full pl-9 pr-3 py-2 bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-xs sm:text-sm"
+                          placeholder="พิมพ์ชื่อสถานที่ เช่น อิมแพ็ค, ไบเทค บางนา, ศูนย์ฯ สิริกิติ์, เซ็นทรัลเวิลด์..."
+                          className="w-full pl-9 pr-8 py-2 bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-xs sm:text-sm"
                         />
+                        {locationSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLocationSearchQuery("");
+                              setLocationSearchResults([]);
+                              setHasSearchedLocationEmpty(false);
+                            }}
+                            aria-label="ล้างคำค้นหา"
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                       <button
                         type="button"
                         disabled={isSearchingLocation}
-                        onClick={handleSearchVenueLocation}
+                        onClick={() => handleSearchVenueLocation()}
                         className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         {isSearchingLocation ? (
@@ -3469,40 +3556,87 @@ export default function AdminDashboardView({
                       </button>
                     </div>
 
-                    {locationSearchResults.length > 0 && (
-                      <div className="bg-white border border-slate-200 rounded-xl shadow-md divide-y divide-slate-100 max-h-52 overflow-y-auto">
-                        {locationSearchResults.map((place) => (
+                    {/* Quick-Pick Popular Event Venues */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      <span className="text-[11px] font-semibold text-slate-500 mr-0.5">สถานที่ยอดนิยม:</span>
+                      {QUICK_PICK_VENUES.map((venue) => {
+                        const isSelected = localConfig.eventLocationName === venue.name;
+                        const labelShort = venue.name.split(" (")[0];
+                        return (
                           <button
-                            key={place.placeId + place.lat}
+                            key={venue.placeId}
                             type="button"
-                            onClick={() => {
-                              const shortName = place.displayName.split(",")[0]?.trim() || place.displayName;
-                              handleUpdateLocalConfig({
-                                eventLat: place.lat.toFixed(6),
-                                eventLng: place.lng.toFixed(6),
-                                eventLocationName: shortName,
-                              });
-                              setLocationSearchResults([]);
-                              setShowMapPreview(true);
-                              showToast({
-                                type: "success",
-                                title: "เลือกสถานที่จัดงานแล้ว",
-                                message: `${shortName} (${place.lat.toFixed(5)}, ${place.lng.toFixed(5)})`,
-                              });
-                            }}
-                            className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 transition flex items-start gap-2.5 cursor-pointer"
+                            onClick={() => handleSelectVenuePlace(venue)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                              isSelected
+                                ? "bg-primary/10 border-primary/40 text-primary"
+                                : "bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-100"
+                            }`}
                           >
-                            <MapPin className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                            <div className="min-w-0 flex-1">
-                              <p className="text-xs font-bold text-slate-800 line-clamp-2 leading-snug">
-                                {place.displayName}
-                              </p>
-                              <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
-                                {place.lat.toFixed(5)}, {place.lng.toFixed(5)}
-                              </p>
-                            </div>
+                            {labelShort}
                           </button>
-                        ))}
+                        );
+                      })}
+                    </div>
+
+                    {locationSearchResults.length > 0 && (
+                      <div className="bg-white border border-slate-200 rounded-xl shadow-md overflow-hidden">
+                        <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-slate-600">
+                            พบ {locationSearchResults.length} สถานที่ที่ตรงกัน (คลิกเพื่อเลือกพิกัด)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setLocationSearchResults([])}
+                            className="text-[11px] font-semibold text-slate-400 hover:text-slate-600 cursor-pointer"
+                          >
+                            ปิดรายการ
+                          </button>
+                        </div>
+                        <div className="divide-y divide-slate-100 max-h-60 overflow-y-auto">
+                          {locationSearchResults.map((place) => (
+                            <button
+                              key={`${place.placeId}-${place.lat.toFixed(5)}-${place.lng.toFixed(5)}`}
+                              type="button"
+                              onClick={() => handleSelectVenuePlace(place)}
+                              className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 transition flex items-start gap-2.5 cursor-pointer"
+                            >
+                              <MapPin className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <p className="text-xs font-bold text-slate-800 leading-snug">
+                                    {place.name}
+                                  </p>
+                                  {place.type && (
+                                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                                      {place.type}
+                                    </span>
+                                  )}
+                                  {place.source === "popular" && (
+                                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200/70">
+                                      แนะนำ
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-500 line-clamp-2 leading-snug mt-0.5">
+                                  {place.displayName}
+                                </p>
+                                <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+                                  พิกัด: {place.lat.toFixed(5)}, {place.lng.toFixed(5)}
+                                </p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {hasSearchedLocationEmpty && !isSearchingLocation && locationSearchResults.length === 0 && (
+                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200/80 rounded-xl px-3 py-2 flex items-center gap-2">
+                        <Info className="w-4 h-4 shrink-0 text-amber-600" />
+                        <span>
+                          ไม่พบสถานที่จากคำค้นหานี้ — ลองพิมพ์คำสั้นลง (เช่น ชื่อเขต/จังหวัด) หรือวางลิงก์ Google Maps ในวิธีที่ 2 ด้านล่าง
+                        </span>
                       </div>
                     )}
                   </div>
