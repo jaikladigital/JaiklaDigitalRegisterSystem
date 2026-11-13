@@ -68,7 +68,8 @@ const DEFAULT_CONFIG = {
   consentEnabled: true,
   consentCompanyName: 'บริษัท ใจกล้า ดิจิตอล จำกัด',
   consentDataTypes: 'ชื่อ-นามสกุล, เบอร์โทรศัพท์, อีเมล, รูปภาพ',
-  consentPurpose: 'ดำเนินกิจกรรม'
+  consentPurpose: 'ดำเนินกิจกรรม',
+  boothGpPercent: 15
 };
 
 export default function App() {

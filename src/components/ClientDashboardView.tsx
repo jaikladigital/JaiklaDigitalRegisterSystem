@@ -265,11 +265,14 @@ export default function ClientDashboardView({
     const totalBoothScans = boothScanLogs.length;
     const totalBoothSales = boothScanLogs.reduce((sum, log) => sum + (Number(log.salesAmount) || 0), 0);
 
+    const globalGpPercent = typeof localConfig?.boothGpPercent === 'number' ? localConfig.boothGpPercent : 0;
+
     const breakdowns = booths.map((b) => {
       const logsForBooth = boothScanLogs.filter((log) => log.boothId === b.id);
       const totalScans = logsForBooth.length;
       const grossSales = logsForBooth.reduce((sum, log) => sum + (Number(log.salesAmount) || 0), 0);
-      const gpReceived = grossSales * ((b.commissionRate || 0) / 100);
+      const effectiveRate = typeof b.commissionRate === 'number' && b.commissionRate > 0 ? b.commissionRate : globalGpPercent;
+      const gpReceived = grossSales * (effectiveRate / 100);
       const netStorePayout = grossSales - gpReceived;
 
       return {
@@ -280,7 +283,7 @@ export default function ClientDashboardView({
         promptpayId: b.promptpayId,
         promptpayName: b.promptpayName,
         rentFee: b.rentFee || 0,
-        commissionRate: b.commissionRate || 0,
+        commissionRate: effectiveRate,
         totalScans,
         grossSales,
         gpReceived,
@@ -304,7 +307,7 @@ export default function ClientDashboardView({
       totalNetPayout,
       boothBreakdowns: sortedBreakdowns,
     };
-  }, [booths, boothScanLogs]);
+  }, [booths, boothScanLogs, localConfig?.boothGpPercent]);
 
   // Check if at least one widget/card is allowed to be rendered
   const anyWidgetVisible =

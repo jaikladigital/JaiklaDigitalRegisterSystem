@@ -28,6 +28,7 @@ import {
   Printer,
   Save,
   RefreshCw,
+  RotateCcw,
   Tags,
   Edit2,
   Plus,
@@ -602,7 +603,65 @@ export default function AdminDashboardView({
   const [bFormIsSaving, setBFormIsSaving] = useState(false);
   const [bLogSearch, setBLogSearch] = useState("");
   const [bLogFilterBooth, setBLogFilterBooth] = useState("");
-  const [bGpPercent, setBGpPercent] = useState(15);
+  const DEFAULT_BOOTH_GP_PERCENT = 15;
+  const BOOTH_SETTINGS_DRAFT_KEY = "booth_settings_draft_v1";
+  const savedBoothGpPercent =
+    typeof config?.boothGpPercent === "number" && !isNaN(config.boothGpPercent)
+      ? Math.min(50, Math.max(0, config.boothGpPercent))
+      : DEFAULT_BOOTH_GP_PERCENT;
+  const [bGpPercent, setBGpPercent] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem(BOOTH_SETTINGS_DRAFT_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed?.gpPercent === "number" && !isNaN(parsed.gpPercent)) {
+            return Math.min(50, Math.max(0, parsed.gpPercent));
+          }
+        }
+      } catch {
+        // ignore storage errors
+      }
+    }
+    return savedBoothGpPercent;
+  });
+  const [hasBoothDraft, setHasBoothDraft] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return Boolean(localStorage.getItem(BOOTH_SETTINGS_DRAFT_KEY));
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  });
+  const [isBoothSettingsSaving, setIsBoothSettingsSaving] = useState(false);
+
+  const updateBoothGpPercent = (nextVal: number) => {
+    const clamped = Math.min(50, Math.max(0, Math.round(Number(nextVal) || 0)));
+    setBGpPercent(clamped);
+    setHasBoothDraft(true);
+    try {
+      localStorage.setItem(
+        BOOTH_SETTINGS_DRAFT_KEY,
+        JSON.stringify({ gpPercent: clamped, updatedAt: Date.now() })
+      );
+    } catch {
+      // ignore storage quota errors
+    }
+  };
+
+  useEffect(() => {
+    if (!hasBoothDraft) {
+      setBGpPercent(savedBoothGpPercent);
+    }
+  }, [savedBoothGpPercent, hasBoothDraft]);
+
+  const isBoothSettingsDirty = bGpPercent !== savedBoothGpPercent;
+  const isBoothSettingsAtDefault =
+    bGpPercent === DEFAULT_BOOTH_GP_PERCENT &&
+    savedBoothGpPercent === DEFAULT_BOOTH_GP_PERCENT;
+
   const [showSurveyClearConfirm, setShowSurveyClearConfirm] = useState(false);
   const [isClearingSurveys, setIsClearingSurveys] = useState(false);
   const [isConfirmProcessing, setIsConfirmProcessing] = useState(false);
@@ -1317,6 +1376,107 @@ export default function AdminDashboardView({
           });
         }
       }
+    });
+  };
+
+  const handleSaveBoothSettings = async () => {
+    setIsBoothSettingsSaving(true);
+    try {
+      const prevGp = savedBoothGpPercent;
+      await setConfig((prev: any) => ({
+        ...prev,
+        boothGpPercent: bGpPercent,
+        boothSettingsUpdatedAt: Date.now(),
+        boothSettingsUpdatedBy: auth.currentUser?.email || "Admin",
+      }));
+      setHasBoothDraft(false);
+      try {
+        localStorage.removeItem(BOOTH_SETTINGS_DRAFT_KEY);
+      } catch {
+        // ignore
+      }
+      await logStaffAction(
+        "UPDATE_BOOTH_SETTINGS",
+        `Updated Booth Management GP rate from ${prevGp}% to ${bGpPercent}%`
+      );
+      showToast({
+        type: "success",
+        title: "บันทึกการตั้งค่าบูธกิจกรรมสำเร็จ",
+        message: `บันทึกอัตราส่วนแบ่ง GP ส่วนกลางเป็น ${bGpPercent}% ลงฐานข้อมูลเรียบร้อยแล้ว`,
+      });
+    } catch (err) {
+      console.error("Save booth settings error:", err);
+      const friendly = getFriendlyFirestoreError(err);
+      showToast({
+        type: "error",
+        title: "ไม่สามารถบันทึกการตั้งค่าบูธได้",
+        message: friendly.message,
+        details: friendly.details,
+      });
+    } finally {
+      setIsBoothSettingsSaving(false);
+    }
+  };
+
+  const handleRevertBoothDraft = () => {
+    setBGpPercent(savedBoothGpPercent);
+    setHasBoothDraft(false);
+    try {
+      localStorage.removeItem(BOOTH_SETTINGS_DRAFT_KEY);
+    } catch {
+      // ignore
+    }
+    showToast({
+      type: "info",
+      title: "คืนค่าที่บันทึกล่าสุดแล้ว",
+      message: `กลับไปใช้อัตราส่วนแบ่ง GP ที่บันทึกล่าสุด (${savedBoothGpPercent}%)`,
+    });
+  };
+
+  const handleResetBoothSettings = () => {
+    showConfirm({
+      title: "ยืนยันรีเซ็ตการตั้งค่าบูธเป็นค่าเริ่มต้น?",
+      message: `การดำเนินการนี้จะรีเซ็ตอัตราส่วนแบ่ง GP ส่วนกลางจากปัจจุบัน (${bGpPercent}%) กลับเป็นค่าเริ่มต้นของระบบ (${DEFAULT_BOOTH_GP_PERCENT}%) และบันทึกลงฐานข้อมูลทันที คุณแน่ใจหรือไม่?`,
+      confirmText: `รีเซ็ตเป็นค่าเริ่มต้น (${DEFAULT_BOOTH_GP_PERCENT}%)`,
+      colorType: "amber",
+      onConfirm: async () => {
+        setIsBoothSettingsSaving(true);
+        try {
+          await setConfig((prev: any) => ({
+            ...prev,
+            boothGpPercent: DEFAULT_BOOTH_GP_PERCENT,
+            boothSettingsUpdatedAt: Date.now(),
+            boothSettingsUpdatedBy: auth.currentUser?.email || "Admin",
+          }));
+          setBGpPercent(DEFAULT_BOOTH_GP_PERCENT);
+          setHasBoothDraft(false);
+          try {
+            localStorage.removeItem(BOOTH_SETTINGS_DRAFT_KEY);
+          } catch {
+            // ignore
+          }
+          await logStaffAction(
+            "RESET_BOOTH_SETTINGS",
+            `Reset Booth Management GP rate back to default (${DEFAULT_BOOTH_GP_PERCENT}%)`
+          );
+          showToast({
+            type: "success",
+            title: "รีเซ็ตเป็นค่าเริ่มต้นสำเร็จ",
+            message: `คืนค่าอัตราส่วนแบ่ง GP ส่วนกลางกลับเป็น ${DEFAULT_BOOTH_GP_PERCENT}% เรียบร้อยแล้ว`,
+          });
+        } catch (err) {
+          console.error("Reset booth settings error:", err);
+          const friendly = getFriendlyFirestoreError(err);
+          showToast({
+            type: "error",
+            title: "ไม่สามารถรีเซ็ตการตั้งค่าบูธได้",
+            message: friendly.message,
+            details: friendly.details,
+          });
+        } finally {
+          setIsBoothSettingsSaving(false);
+        }
+      },
     });
   };
 
@@ -6013,24 +6173,100 @@ export default function AdminDashboardView({
       ) : activeTab === "booths" ? (
         <div className="space-y-6">
           {/* Header Card */}
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div>
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
+            <div className="min-w-0">
               <h3 className="font-bold text-xl flex items-center gap-2 text-slate-800 font-sans tracking-tight">
-                <Store className="w-6 h-6 text-rose-500" />
-                บริหารจัดการบูธกิจกรรม & รายงานสรุป (Booth Management & Financials)
+                <Store className="w-6 h-6 text-rose-500 shrink-0" />
+                <span>บริหารจัดการบูธกิจกรรม & รายงานสรุป (Booth Management & Financials)</span>
               </h3>
               <p className="text-slate-500 text-xs mt-1">
                 สร้างแก้ไขซุ้มบูธกิจกรรม กำหนดเลขพร้อมเพย์ผู้ขาย ตรวจสอบพฤติกรรมผู้ร่วมงาน และคำนวณแบ่งปันสัดส่วนรายได้สุทธิระบบ GP
               </p>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs mt-2 font-sans">
+                {isBoothSettingsDirty ? (
+                  <span className="text-amber-600 font-bold flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    มีการแก้ไขอัตรา GP เป็น <span className="font-mono tabular-nums">{bGpPercent}%</span> (ยังไม่บันทึกลงฐานข้อมูล · ค่าที่บันทึกล่าสุด <span className="font-mono tabular-nums">{savedBoothGpPercent}%</span>)
+                  </span>
+                ) : (
+                  <span className="text-slate-500 font-medium flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>
+                      อัตรา GP ที่บันทึกไว้: <strong className="text-slate-700 font-mono tabular-nums">{savedBoothGpPercent}%</strong>
+                      {config?.boothSettingsUpdatedAt && (
+                        <>
+                          <span className="mx-1.5 text-slate-300" aria-hidden="true">·</span>
+                          <span>
+                            บันทึกล่าสุด {new Date(config.boothSettingsUpdatedAt).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}
+                          </span>
+                        </>
+                      )}
+                    </span>
+                  </span>
+                )}
+              </div>
             </div>
-            <button
-              onClick={handleExportCSV}
-              disabled={booths.length === 0}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-md transition"
-            >
-              <FileSpreadsheet className="w-4 h-4" />
-              รายงานแบ่งยอดขาย (Export CSV)
-            </button>
+
+            <div className="flex flex-wrap items-center gap-2.5 w-full xl:w-auto xl:justify-end shrink-0">
+              {isBoothSettingsDirty && (
+                <button
+                  type="button"
+                  onClick={handleRevertBoothDraft}
+                  disabled={isBoothSettingsSaving}
+                  className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition whitespace-nowrap shrink-0"
+                  title={`ย้อนกลับไปใช้ค่าที่บันทึกล่าสุด (${savedBoothGpPercent}%)`}
+                >
+                  คืนค่าล่าสุด ({savedBoothGpPercent}%)
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSaveBoothSettings}
+                disabled={isBoothSettingsSaving || !isBoothSettingsDirty}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition whitespace-nowrap shrink-0 shadow-sm active:scale-95 ${
+                  isBoothSettingsDirty
+                    ? "bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200"
+                    : "bg-slate-100 text-slate-500 cursor-default shadow-none"
+                } disabled:opacity-60`}
+              >
+                {isBoothSettingsSaving ? (
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                ) : isBoothSettingsDirty ? (
+                  <Save className="w-4 h-4 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                )}
+                <span>
+                  {isBoothSettingsSaving
+                    ? "กำลังบันทึก..."
+                    : isBoothSettingsDirty
+                    ? "บันทึกการตั้งค่าล่าสุด"
+                    : "บันทึกแล้ว"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetBoothSettings}
+                disabled={isBoothSettingsSaving || isBoothSettingsAtDefault}
+                className="flex items-center gap-2 bg-white hover:bg-slate-50 border border-slate-200 disabled:opacity-45 disabled:cursor-not-allowed text-slate-700 px-4 py-2.5 rounded-xl text-sm font-bold transition whitespace-nowrap shrink-0 active:scale-95"
+                title={`รีเซ็ตอัตราส่วนแบ่ง GP กลับเป็นค่าเริ่มต้น (${DEFAULT_BOOTH_GP_PERCENT}%)`}
+              >
+                <RotateCcw className="w-4 h-4 text-slate-500 shrink-0" />
+                <span>รีเซ็ตค่าเริ่มต้น</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                disabled={booths.length === 0}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm transition whitespace-nowrap shrink-0 active:scale-95"
+              >
+                <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                <span>รายงานแบ่งยอดขาย (Export CSV)</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -6220,9 +6456,21 @@ export default function AdminDashboardView({
               
               {/* Dynamic Fee percent adjustment */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs space-y-3 font-sans">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center gap-2">
                   <span className="font-bold text-slate-700">คำนวณส่วนแบ่ง GP ส่วนกลาง:</span>
-                  <span className="bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-black text-xs font-mono">{bGpPercent}%</span>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={0}
+                      max={50}
+                      step={1}
+                      value={bGpPercent}
+                      onChange={(e) => updateBoothGpPercent(Number(e.target.value))}
+                      aria-label="อัตราส่วนแบ่ง GP (%)"
+                      className="w-16 px-2 py-1 text-right bg-white border border-slate-200 rounded-lg font-black text-xs font-mono tabular-nums text-emerald-700 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                    />
+                    <span className="font-mono font-bold text-slate-500">%</span>
+                  </div>
                 </div>
                 <input
                   type="range"
@@ -6230,12 +6478,93 @@ export default function AdminDashboardView({
                   max="50"
                   step="1"
                   value={bGpPercent}
-                  onChange={(e) => setBGpPercent(Number(e.target.value))}
+                  onChange={(e) => updateBoothGpPercent(Number(e.target.value))}
                   className="w-full accent-rose-500 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer"
                 />
-                <div className="flex justify-between text-[10px] text-slate-400 font-bold font-mono">
+                <div className="flex justify-between text-[10px] text-slate-400 font-bold font-mono tabular-nums">
                   <span>0% (ไม่มี GP)</span>
+                  <span>ค่าเริ่มต้น {DEFAULT_BOOTH_GP_PERCENT}%</span>
                   <span>50% สูงสุด</span>
+                </div>
+
+                {/* Quick presets */}
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {[0, 5, 10, 15, 20, 30].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => updateBoothGpPercent(preset)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold font-mono tabular-nums transition whitespace-nowrap ${
+                        bGpPercent === preset
+                          ? "bg-slate-800 text-white"
+                          : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      {preset}%
+                    </button>
+                  ))}
+                </div>
+
+                {/* Inline Save & Reset Controls */}
+                <div className="pt-2.5 border-t border-slate-200/80 space-y-2">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-500">
+                      ค่าที่บันทึกไว้ในระบบ:{" "}
+                      <strong className="text-slate-700 font-mono tabular-nums">{savedBoothGpPercent}%</strong>
+                    </span>
+                    {isBoothSettingsDirty && (
+                      <span className="text-amber-600 font-bold">ยังไม่บันทึก</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveBoothSettings}
+                      disabled={isBoothSettingsSaving || !isBoothSettingsDirty}
+                      className={`flex-1 px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition whitespace-nowrap ${
+                        isBoothSettingsDirty
+                          ? "bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
+                          : "bg-white border border-slate-200 text-slate-500 cursor-default"
+                      } disabled:opacity-60`}
+                    >
+                      {isBoothSettingsSaving ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                      ) : isBoothSettingsDirty ? (
+                        <Save className="w-3.5 h-3.5 shrink-0" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      )}
+                      <span>
+                        {isBoothSettingsSaving
+                          ? "กำลังบันทึก..."
+                          : isBoothSettingsDirty
+                          ? `บันทึกค่าล่าสุด (${bGpPercent}%)`
+                          : "บันทึกค่าล่าสุดแล้ว"}
+                      </span>
+                    </button>
+
+                    {isBoothSettingsDirty && (
+                      <button
+                        type="button"
+                        onClick={handleRevertBoothDraft}
+                        disabled={isBoothSettingsSaving}
+                        className="px-3 py-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold transition whitespace-nowrap"
+                      >
+                        คืนค่า ({savedBoothGpPercent}%)
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleResetBoothSettings}
+                      disabled={isBoothSettingsSaving || isBoothSettingsAtDefault}
+                      className="px-3 py-2 bg-white hover:bg-slate-100 border border-slate-200 disabled:opacity-45 disabled:cursor-not-allowed text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition whitespace-nowrap"
+                      title={`รีเซ็ตกลับเป็นค่าเริ่มต้น ${DEFAULT_BOOTH_GP_PERCENT}%`}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                      <span>รีเซ็ต ({DEFAULT_BOOTH_GP_PERCENT}%)</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
